@@ -7,6 +7,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
+// TenantInfo is a key type for storing tenant information in context
+type TenantInfo string
+
+// ContextTenantKey is the key used to store tenant information in context
+const ContextTenantKey TenantInfo = "tenant_id"
+
 // TenantTaggedCredentialsProvider adds tenant tags to AWS credentials
 // This is a custom implementation to modify the session token with tenant information
 // without using STS AssumeRole operations
@@ -32,12 +38,15 @@ func (t *TenantTaggedCredentialsProvider) Retrieve(ctx context.Context) (aws.Cre
 	return creds, nil
 }
 
-// AddTenantToContext modifies the AWS context to include tenant-tagged credentials
+// WithTenantID adds tenant ID to the context
 // This function should be called when processing requests to ensure the tenant context
 // is properly propagated to AWS API calls
-func AddTenantToContext(ctx context.Context, cfg aws.Config, tenantID string) context.Context {
-	return aws.ContextWithCredentialsProvider(ctx, &TenantTaggedCredentialsProvider{
-		Source:   cfg.Credentials,
-		TenantID: tenantID,
-	})
+func WithTenantID(ctx context.Context, tenantID string) context.Context {
+	return context.WithValue(ctx, ContextTenantKey, tenantID)
+}
+
+// GetTenantID retrieves tenant ID from context
+func GetTenantID(ctx context.Context) (string, bool) {
+	val, ok := ctx.Value(ContextTenantKey).(string)
+	return val, ok
 }

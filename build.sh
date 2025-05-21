@@ -21,4 +21,14 @@ mkdir -p .aws-sam/build/PreTokenGenerationLambda
 cp lambda/pre-token/bootstrap .aws-sam/build/PreTokenGenerationLambda/
 (cd .aws-sam/build/PreTokenGenerationLambda && zip -r function.zip bootstrap)
 
+# Build authorizer Lambda
+echo "Building authorizer Lambda function..."
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags lambda.norpc -ldflags="-s -w" -o lambda/authorizer/bootstrap ./lambda/authorizer
+
+# Create zip file for authorizer Lambda
+echo "Creating zip for authorizer Lambda..."
+mkdir -p .aws-sam/build/TenantAuthorizerFunction
+cp lambda/authorizer/bootstrap .aws-sam/build/TenantAuthorizerFunction/
+(cd .aws-sam/build/TenantAuthorizerFunction && zip -r function.zip bootstrap)
+
 echo "Build complete!"

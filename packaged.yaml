@@ -1,0 +1,316 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Multi-tenant file upload service with Cognito authentication and S3 storage
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: provided.al2023
+    Architectures:
+    - x86_64
+Parameters:
+  DomainName:
+    Type: String
+    Default: stefando.me
+    Description: The domain name for the API (Route53 hosted zone must exist)
+  ApiSubdomain:
+    Type: String
+    Default: upload-api
+    Description: Subdomain for the API endpoint
+  HostedZoneId:
+    Type: String
+    Description: ID of the Route53 hosted zone for the domain
+    Default: ''
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: upload-demo-user-pool
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      AutoVerifiedAttributes:
+      - email
+      Schema:
+      - Name: email
+        AttributeDataType: String
+        Required: true
+        Mutable: true
+      - Name: tenant_id
+        AttributeDataType: String
+        Required: false
+        Mutable: true
+      LambdaConfig:
+        PreTokenGeneration:
+          Fn::GetAtt:
+          - PreTokenGenerationLambda
+          - Arn
+    Metadata:
+      SamResourceId: UserPool
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId:
+        Ref: UserPool
+      ClientName: upload-demo-client
+      ExplicitAuthFlows:
+      - ADMIN_NO_SRP_AUTH
+      - USER_PASSWORD_AUTH
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+    Metadata:
+      SamResourceId: UserPoolClient
+  PreTokenGenerationLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: upload-demo-pre-token-generation
+      CodeUri: s3://aws-sam-cli-managed-default-samclisourcebucket-gjzdgbfvwjgj/f20f633a97148d23cb4763f1b6e45a8d
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Environment:
+        Variables:
+          LOG_LEVEL: INFO
+    Metadata:
+      SamResourceId: PreTokenGenerationLambda
+  PreTokenGenerationLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Ref: PreTokenGenerationLambda
+      Action: lambda:InvokeFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn:
+        Fn::GetAtt:
+        - UserPool
+        - Arn
+    Metadata:
+      SamResourceId: PreTokenGenerationLambdaPermission
+  TenantABucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: ${AWS::StackName}-store-tenant-a
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+      - Key: TenantId
+        Value: tenant-a
+      - Key: Purpose
+        Value: FileStorage
+    Metadata:
+      SamResourceId: TenantABucket
+  TenantBBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: ${AWS::StackName}-store-tenant-b
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+      - Key: TenantId
+        Value: tenant-b
+      - Key: Purpose
+        Value: FileStorage
+    Metadata:
+      SamResourceId: TenantBBucket
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-lambda-execution-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+      - PolicyName: TenantBasedS3Access
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:ListBucket
+            Resource:
+            - Fn::GetAtt:
+              - TenantABucket
+              - Arn
+            - Fn::GetAtt:
+              - TenantBBucket
+              - Arn
+            - Fn::Sub: ${TenantABucket.Arn}/*
+            - Fn::Sub: ${TenantBBucket.Arn}/*
+    Metadata:
+      SamResourceId: LambdaExecutionRole
+  UploadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: ${AWS::StackName}-upload-function
+      CodeUri: s3://aws-sam-cli-managed-default-samclisourcebucket-gjzdgbfvwjgj/d8c939bbfbbf831199f465f2f477ea3b
+      Handler: bootstrap
+      Role:
+        Fn::GetAtt:
+        - LambdaExecutionRole
+        - Arn
+      Environment:
+        Variables:
+          TENANT_A_BUCKET:
+            Ref: TenantABucket
+          TENANT_B_BUCKET:
+            Ref: TenantBBucket
+          USER_POOL_ID:
+            Ref: UserPool
+          USER_POOL_CLIENT_ID:
+            Ref: UserPoolClient
+          LOG_LEVEL: INFO
+      Events:
+        Upload:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: ApiGateway
+            Path: /upload
+            Method: POST
+            Auth:
+              Authorizer: CognitoJWTAuthorizer
+        Health:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: ApiGateway
+            Path: /health
+            Method: GET
+    Metadata:
+      SamResourceId: UploadFunction
+  TenantAuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: ${AWS::StackName}-tenant-authorizer
+      CodeUri: s3://aws-sam-cli-managed-default-samclisourcebucket-gjzdgbfvwjgj/830adc66e1697cfa3e6ed132e8230fac
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Environment:
+        Variables:
+          LOG_LEVEL: INFO
+      Policies:
+      - Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action: execute-api:Invoke
+          Resource:
+            Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/*/*
+    Metadata:
+      SamResourceId: TenantAuthorizerFunction
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-api
+      StageName: prod
+      Auth:
+        DefaultAuthorizer: CognitoJWTAuthorizer
+        Authorizers:
+          CognitoJWTAuthorizer:
+            UserPoolArn:
+              Fn::GetAtt:
+              - UserPool
+              - Arn
+            AuthType: COGNITO_USER_POOLS
+            Identity:
+              Header: Authorization
+              ValidationExpression: Bearer .*
+          TenantVerificationAuthorizer:
+            FunctionPayloadType: REQUEST
+            FunctionArn:
+              Fn::GetAtt:
+              - TenantAuthorizerFunction
+              - Arn
+            Identity:
+              Headers:
+              - Authorization
+      Domain:
+        DomainName:
+          Fn::Sub: ${ApiSubdomain}.${DomainName}
+        CertificateArn:
+          Ref: ApiCertificate
+        Route53:
+          HostedZoneId:
+            Ref: HostedZoneId
+    Metadata:
+      SamResourceId: ApiGateway
+  ApiCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName:
+        Fn::Sub: ${ApiSubdomain}.${DomainName}
+      ValidationMethod: DNS
+      DomainValidationOptions:
+      - DomainName:
+          Fn::Sub: ${ApiSubdomain}.${DomainName}
+        HostedZoneId:
+          Ref: HostedZoneId
+    Metadata:
+      SamResourceId: ApiCertificate
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint URL
+    Value:
+      Fn::Sub: https://${ApiSubdomain}.${DomainName}/prod
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-api-url
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value:
+      Ref: UserPool
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-user-pool-id
+  UserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value:
+      Ref: UserPoolClient
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-user-pool-client-id
+  TenantABucket:
+    Description: S3 bucket for tenant A
+    Value:
+      Ref: TenantABucket
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-tenant-a-bucket
+  TenantBBucket:
+    Description: S3 bucket for tenant B
+    Value:
+      Ref: TenantBBucket
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-tenant-b-bucket

@@ -34,7 +34,7 @@ func init() {
 	}
 
 	// Initialize S3 client
-	s3Client = s3.NewClient(s3.Options{Credentials: cfg.Credentials})
+	s3Client = s3.NewFromConfig(cfg)
 
 	// Create a mapping of tenant IDs to bucket names
 	// In a real app, this could come from a database or configuration service
@@ -57,6 +57,7 @@ func setupRouter() *chi.Mux {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(auth.TenantMiddleware) // Add tenant information to all requests
 
 	// API routes
 	r.Route("/upload", func(r chi.Router) {
@@ -75,18 +76,10 @@ func setupRouter() *chi.Mux {
 
 // handleUpload processes file upload requests
 func handleUpload(w http.ResponseWriter, r *http.Request) {
-	// Extract tenant ID from the Authorization header
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
-		http.Error(w, "Authorization header required", http.StatusUnauthorized)
-		return
-	}
-
-	// Extract tenant ID from JWT token
-	tenantID, err := auth.ExtractTenantFromToken(authHeader)
-	if err != nil {
-		log.Printf("JWT extraction error: %v", err)
-		http.Error(w, "Invalid authorization token", http.StatusUnauthorized)
+	// Get tenant ID from the context (set by TenantMiddleware)
+	tenantID, ok := auth.GetTenantID(r.Context())
+	if !ok {
+		http.Error(w, "Tenant ID not found in request context", http.StatusUnauthorized)
 		return
 	}
 
@@ -104,17 +97,8 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create a context with tenant information for AWS API calls
+	// Use the context that already has tenant information (from middleware)
 	ctx := r.Context()
-	cfg, err := config.LoadDefaultConfig(ctx)
-	if err != nil {
-		log.Printf("Failed to load AWS config: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-	
-	// Add tenant information to AWS credentials context
-	ctx = auth.AddTenantToContext(ctx, cfg, tenantID)
 
 	// Upload the file to S3
 	filePath, err := uploadService.UploadFile(ctx, tenantID, body)

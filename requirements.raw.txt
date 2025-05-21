@@ -1,0 +1,18 @@
+We will create an AWS lamda function in GO.
+  The main idea is to simulate very basic multitenant application. There will be two S3 buckets. Lambda, in the first iteration, will only have a single endpoint called `upload` and it will save the payload from the request as a file in the S3.
+  The file name will be in the format `YYYY/MM/DD/<guid>.json`.
+  There will be a `Cognito` service used for authorization. We need to create a way to authorize, that should produce the JWT token, that will be used as a bearer token for any other calls.
+  There will be two users, each belonging to a single tenant (for the first iteration user->tenant mapping can be hardcoded).
+  In the JWT produced there will be a claim with the tenant information.
+  The API will read this claim nad decide which S3 bucket it should use for upload.
+  As simple as this.
+  For the security, we will use resource tag -> session tag matching and an AWS policy, allowing S3 access to the Role which is running the lambda and the session token with the tenant information will need to match the resource token on the S3 bucket. (We might need to invent a naming 
+  convention for now to simplify the setup).
+  The whole solution should be deployable as a `CloudFormation` and we can/shall use the aws-sam cli for the manipulation.
+  I have a DNS route in the route53 service, we will bring this together.
+  We should not create an Makefile-s, we will use the tasks (https://taskfile.dev/).
+  We will use git, and you will create the private repo `uploadDemoAWS` in my github account.
+  The lambda itself will in later stages have multiple methods. Please use the `Chi` routing for decision which method to call and integrate it into the lambda.
+  Summarize these requirements into the `Claude.md` file and make sure they are up-to-date.
+  Important: If you need informations ask, do not succumb into assumptions and guesswork. Write nice modern idiomatic go.
+  Important: The audience will be senior/stuff level engineers, but novice both in GO (know go, but are not battle-tested yet) and AWS. Please insert important comments, but do not overcomment. Keep the audience in mind.

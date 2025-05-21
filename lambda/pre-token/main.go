@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 
+	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 )
 
@@ -14,69 +15,15 @@ var TenantMapping = map[string]string{
 	"user-tenant-b": "tenant-b",
 }
 
-// CognitoEventRequest represents the Lambda request from Cognito
-type CognitoEventRequest struct {
-	Version               string                 `json:"version"`
-	TriggerSource         string                 `json:"triggerSource"`
-	Region                string                 `json:"region"`
-	UserPoolID            string                 `json:"userPoolId"`
-	CallerContext         CallerContext          `json:"callerContext"`
-	Request               TokenGenerationRequest `json:"request"`
-	Response              TokenGenerationResponse `json:"response"`
-}
-
-// CallerContext provides information about the caller
-type CallerContext struct {
-	AWSSDKVersion string `json:"awsSdkVersion"`
-	ClientID      string `json:"clientId"`
-}
-
-// TokenGenerationRequest contains the user attributes and token claims
-type TokenGenerationRequest struct {
-	UserAttributes map[string]string `json:"userAttributes"`
-	ClientMetadata map[string]string `json:"clientMetadata"`
-	GroupConfiguration GroupConfig `json:"groupConfiguration"`
-}
-
-// GroupConfig contains user group information
-type GroupConfig struct {
-	GroupsToOverride []string `json:"groupsToOverride"`
-	IAMRolesToOverride []string `json:"iamRolesToOverride"`
-	PreferredRole string `json:"preferredRole"`
-}
-
-// TokenGenerationResponse contains the modified token claims
-type TokenGenerationResponse struct {
-	ClaimsOverrideDetails ClaimsOverrideDetails `json:"claimsOverrideDetails"`
-}
-
-// ClaimsOverrideDetails allows modifying token claims
-type ClaimsOverrideDetails struct {
-	GroupOverrideDetails GroupOverrideDetails `json:"groupOverrideDetails"`
-	ClaimsToAddOrOverride map[string]string `json:"claimsToAddOrOverride"`
-	ClaimsToSuppress []string `json:"claimsToSuppress"`
-}
-
-// GroupOverrideDetails contains group membership overrides
-type GroupOverrideDetails struct {
-	GroupsToOverride []string `json:"groupsToOverride"`
-	IAMRolesToOverride []string `json:"iamRolesToOverride"`
-	PreferredRole string `json:"preferredRole"`
-}
-
-// HandleRequest processes the Cognito event and adds tenant claims
-func HandleRequest(ctx context.Context, event CognitoEventRequest) (CognitoEventRequest, error) {
-	// Extract the username from the request
-	username, ok := event.Request.UserAttributes["cognito:username"]
-	if !ok {
-		log.Printf("Username not found in event, skipping tenant claim")
-		return event, nil
-	}
-
+// HandleRequest processes the Cognito Pre Token Generation event
+// Using official AWS SDK event type for Cognito Pre Token Generation
+func HandleRequest(ctx context.Context, event events.CognitoEventUserPoolsPreTokenGen) (events.CognitoEventUserPoolsPreTokenGen, error) {
+	log.Printf("Received event for user: %s", event.UserName)
+	
 	// Look up tenant ID based on username
-	tenantID, ok := TenantMapping[username]
+	tenantID, ok := TenantMapping[event.UserName]
 	if !ok {
-		log.Printf("Tenant mapping not found for user %s, skipping tenant claim", username)
+		log.Printf("Tenant mapping not found for user %s, skipping tenant claim", event.UserName)
 		return event, nil
 	}
 
@@ -88,7 +35,7 @@ func HandleRequest(ctx context.Context, event CognitoEventRequest) (CognitoEvent
 	// Add the tenant_id claim to the token
 	event.Response.ClaimsOverrideDetails.ClaimsToAddOrOverride["tenant_id"] = tenantID
 	
-	log.Printf("Added tenant_id claim %s for user %s", tenantID, username)
+	log.Printf("Added tenant_id claim %s for user %s", tenantID, event.UserName)
 	return event, nil
 }
 

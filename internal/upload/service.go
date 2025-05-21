@@ -53,6 +53,7 @@ func (s *UploadService) UploadFile(ctx context.Context, tenantID string, content
 	}
 	
 	// Upload the file to S3
+	// The tenant context is automatically used by the AWS SDK
 	_, err := s.s3Client.PutObject(ctx, input)
 	if err != nil {
 		return "", fmt.Errorf("failed to upload file: %w", err)

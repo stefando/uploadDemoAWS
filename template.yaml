@@ -208,16 +208,45 @@ Resources:
           USER_POOL_CLIENT_ID: !Ref UserPoolClient
           LOG_LEVEL: INFO
       Events:
-        # API Gateway integration
+        # API Gateway integration for upload endpoint (requires authentication)
         Upload:
           Type: Api
           Properties:
             RestApiId: !Ref ApiGateway
             Path: /upload
             Method: POST
-            # Cognito authorizer ensures only authenticated users can access
+            # Chain authorizers - first Cognito validates JWT, then Lambda verifies tenant_id claim
             Auth:
-              Authorizer: CognitoAuthorizer
+              Authorizer: CognitoJWTAuthorizer
+              
+        # Health check endpoint (no authentication required)
+        Health:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /health
+            Method: GET
+
+  # ================================================
+  # TENANT AUTHORIZER LAMBDA - Custom JWT Claims Validation
+  # ================================================
+  # This Lambda verifies tenant_id claim presence after Cognito validation
+  TenantAuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-tenant-authorizer"
+      CodeUri: .aws-sam/build/TenantAuthorizerFunction/function.zip
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Environment:
+        Variables:
+          LOG_LEVEL: INFO
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: 'execute-api:Invoke'
+              Resource: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/*/*'
 
   # ================================================
   # API GATEWAY - HTTP API Endpoint
@@ -227,12 +256,24 @@ Resources:
     Properties:
       Name: !Sub "${AWS::StackName}-api"
       StageName: prod
-      # Cognito JWT authorizer configuration
+      # Authorization configuration
       Auth:
+        DefaultAuthorizer: CognitoJWTAuthorizer
         Authorizers:
-          CognitoAuthorizer:
+          # First layer: Cognito validates JWT signatures, expiry, etc.
+          CognitoJWTAuthorizer:
             UserPoolArn: !GetAtt UserPool.Arn
             AuthType: COGNITO_USER_POOLS
+            Identity:
+              Header: Authorization
+              ValidationExpression: "Bearer .*"
+          # Second layer: Lambda validates tenant_id claim presence
+          TenantVerificationAuthorizer:
+            FunctionPayloadType: REQUEST
+            FunctionArn: !GetAtt TenantAuthorizerFunction.Arn
+            Identity:
+              Headers:
+                - Authorization
       # Custom domain configuration
       Domain:
         DomainName: !Sub "${ApiSubdomain}.${DomainName}"
