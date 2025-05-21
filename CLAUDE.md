@@ -21,10 +21,11 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
 - **Deployment:** CloudFormation/SAM with Route53 integration on `stefando.me`
 
 ### Security Model
-- JWT bearer tokens from Cognito contain `tenant_id` claim
-- Lambda execution role uses session tags based on JWT claims
-- S3 bucket policies enforce `aws:PrincipalTag/TenantId` conditions
-- Each tenant can only access their designated S3 bucket
+- Cognito User Pool with V2_0 pre-token generation adds `tenant_id` claim to both ID and access tokens
+- API Gateway uses Cognito User Pool authorizer with **ID tokens** (not access tokens)
+- Lambda extracts tenant information from API Gateway request context claims
+- **Current Implementation:** Basic IAM permissions allow access to all tenant buckets
+- **TODO:** Implement session tag-based S3 policies for true tenant isolation
 
 ### Deployment Strategy
 - Use `provided.al2023` runtime with compiled Go binary named `bootstrap`
@@ -56,11 +57,12 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
 ## Architecture Details
 
 ### Multi-tenant Flow
-1. User authenticates with Cognito → receives JWT with `tenant_id` claim
-2. API request includes JWT as Bearer token
-3. Lambda validates JWT and extracts tenant information
-4. Session tags are applied based on tenant claim
-5. S3 access is controlled via bucket policies matching session tags
+1. User authenticates with Cognito → receives ID token with `tenant_id` claim (via V2_0 pre-token generation)
+2. API request includes ID token as Bearer token 
+3. API Gateway Cognito User Pool authorizer validates ID token
+4. Lambda extracts tenant information from API Gateway request context claims
+5. **Current:** Lambda uses tenant-specific bucket based on extracted tenant_id
+6. **TODO:** Implement session tag-based S3 access control for security isolation
 
 ### File Storage Pattern
 - Path: `s3://store-{tenant-id}/YYYY/MM/DD/{guid}.json`
@@ -68,15 +70,16 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
 - GUID ensures unique filenames within daily folders
 
 ### Security Layers
-1. **API Gateway:** JWT validation at gateway level
-2. **Lambda Function:** Additional JWT parsing and tenant extraction
-3. **IAM Policies:** Tag-based conditions for S3 access
-4. **S3 Bucket Policies:** Resource-level protection with principal tag matching
+1. **API Gateway:** Cognito User Pool authorizer validates ID tokens 
+2. **Lambda Function:** Extracts tenant claims from API Gateway request context
+3. **Current IAM:** Basic permissions allow access to all tenant buckets
+4. **TODO:** Implement tag-based IAM policies and S3 bucket policies for tenant isolation
 
 ## Cognito Configuration
-- **User Pool:** Manages user accounts and authentication
+- **User Pool:** Manages user accounts and authentication with V2_0 pre-token generation
 - **User Pool Client:** Handles JWT token generation and validation
-- **Custom Claims:** Tenant ID embedded in JWT payload
+- **Custom Claims:** Tenant ID embedded in both ID and access token payloads via pre-token Lambda
+- **Token Usage:** API Gateway authorizer uses **ID tokens** (not access tokens)
 - **Hardcoded Users:** `user-tenant-a` and `user-tenant-b` for demo purposes
 
 ## AWS Resources Created
