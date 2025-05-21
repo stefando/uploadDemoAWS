@@ -1,0 +1,90 @@
+# Task automation for uploadDemoAWS
+# https://taskfile.dev/
+
+version: '3'
+
+vars:
+  AWS_PROFILE: personal
+  BINARY_NAME: bootstrap
+  BUILD_DIR: .aws-sam/build
+
+tasks:
+  # Build the Lambda function binary for Linux
+  build:
+    desc: Build Go Lambda function for Linux AMD64
+    cmds:
+      - GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o {{.BINARY_NAME}} ./cmd/lambda
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.BINARY_NAME}}"
+
+  # Build using SAM for local testing
+  sam-build:
+    desc: Build using SAM CLI
+    cmds:
+      - sam build --profile {{.AWS_PROFILE}}
+    deps: [build]
+
+  # Deploy the complete stack
+  deploy:
+    desc: Deploy the CloudFormation stack using SAM
+    cmds:
+      - task: sam-build
+      - sam deploy --profile {{.AWS_PROFILE}}
+
+  # Start local API for testing
+  local:
+    desc: Start local API Gateway for testing
+    cmds:
+      - task: sam-build
+      - sam local start-api --profile {{.AWS_PROFILE}}
+
+  # Run Go tests
+  test:
+    desc: Run Go unit tests
+    cmds:
+      - go test -v ./...
+
+  # Format and lint Go code
+  fmt:
+    desc: Format Go code and run static analysis
+    cmds:
+      - go fmt ./...
+      - go vet ./...
+      - go mod tidy
+
+  # Clean build artifacts
+  clean:
+    desc: Clean build artifacts and SAM cache
+    cmds:
+      - rm -f {{.BINARY_NAME}}
+      - rm -rf {{.BUILD_DIR}}
+      - rm -rf .aws-sam
+
+  # Delete the CloudFormation stack
+  delete:
+    desc: Delete the CloudFormation stack
+    cmds:
+      - sam delete --profile {{.AWS_PROFILE}}
+
+  # Get Cognito user pool information for testing
+  info:
+    desc: Display Cognito User Pool and Client information
+    cmds:
+      - aws cognito-idp list-user-pools --max-items 10 --profile {{.AWS_PROFILE}} --query "UserPools[?Name=='upload-demo-user-pool']"
+      - aws cognito-idp list-user-pool-clients --user-pool-id $(aws cognito-idp list-user-pools --max-items 10 --profile {{.AWS_PROFILE}} --query "UserPools[?Name=='upload-demo-user-pool'].Id" --output text) --profile {{.AWS_PROFILE}}
+
+  # Create test users (run after deployment)
+  create-users:
+    desc: Create test users in Cognito User Pool
+    cmds:
+      - echo "Creating test users in Cognito User Pool..."
+      - |
+        USER_POOL_ID=$(aws cognito-idp list-user-pools --max-items 10 --profile {{.AWS_PROFILE}} --query "UserPools[?Name=='upload-demo-user-pool'].Id" --output text)
+        aws cognito-idp admin-create-user --user-pool-id $USER_POOL_ID --username user-tenant-a --message-action SUPPRESS --temporary-password TempPass123! --profile {{.AWS_PROFILE}}
+        aws cognito-idp admin-create-user --user-pool-id $USER_POOL_ID --username user-tenant-b --message-action SUPPRESS --temporary-password TempPass123! --profile {{.AWS_PROFILE}}
+        aws cognito-idp admin-set-user-password --user-pool-id $USER_POOL_ID --username user-tenant-a --password TestPass123! --permanent --profile {{.AWS_PROFILE}}
+        aws cognito-idp admin-set-user-password --user-pool-id $USER_POOL_ID --username user-tenant-b --password TestPass123! --permanent --profile {{.AWS_PROFILE}}

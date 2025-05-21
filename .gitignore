@@ -1,0 +1,55 @@
+# Go binaries
+bootstrap
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go test files
+*.test
+*.out
+
+# Go coverage files
+*.cover
+coverage.out
+
+# Go module cache
+go.sum
+
+# AWS SAM build artifacts
+.aws-sam/
+samconfig.toml.bak
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+
+# Environment files
+.env
+.env.local
+.env.production
+
+# Logs
+*.log
+logs/
+
+# AWS credentials (should never be committed)
+.aws/
+credentials

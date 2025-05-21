@@ -1,0 +1,21 @@
+# SAM CLI configuration file
+# This file stores deployment parameters and settings
+
+version = 0.1
+
+[default]
+[default.deploy]
+[default.deploy.parameters]
+stack_name = "upload-demo-stack"
+s3_bucket = ""  # SAM will create a deployment bucket automatically
+s3_prefix = "upload-demo"
+region = ""     # Will use AWS profile's default region
+confirm_changeset = false
+capabilities = "CAPABILITY_NAMED_IAM"
+parameter_overrides = []
+image_repositories = []
+
+[default.build]
+[default.build.parameters]
+parallel = true
+cached = true

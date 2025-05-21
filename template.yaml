@@ -1,0 +1,313 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Multi-tenant file upload service with Cognito authentication and S3 storage
+
+# Global configuration for all resources
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: provided.al2023
+    Architectures:
+      - x86_64
+
+Parameters:
+  DomainName:
+    Type: String
+    Default: stefando.me
+    Description: The domain name for the API (Route53 hosted zone must exist)
+  
+  ApiSubdomain:
+    Type: String
+    Default: upload-api
+    Description: Subdomain for the API endpoint
+
+Resources:
+  # ================================================
+  # COGNITO USER POOL - Authentication Service
+  # ================================================
+  # User Pool manages user accounts and authentication
+  # Think of it as your user database + authentication logic
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: upload-demo-user-pool
+      # Password policy for security
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      # Auto-verify email addresses (for production, you'd want email verification)
+      AutoVerifiedAttributes:
+        - email
+      # Schema defines what user attributes we collect
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+        - Name: tenant_id
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+      # Lambda triggers for adding custom claims to JWT
+      LambdaConfig:
+        PreTokenGeneration: !GetAtt PreTokenGenerationLambda.Arn
+
+  # User Pool Client - handles JWT token generation
+  # This is what your frontend application uses to authenticate users
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: upload-demo-client
+      # Explicit auth flows - these determine how clients can authenticate
+      ExplicitAuthFlows:
+        - ADMIN_NO_SRP_AUTH  # Allow admin-initiated auth (for testing)
+        - USER_PASSWORD_AUTH # Allow username/password auth
+      # Token validity periods
+      AccessTokenValidity: 1  # 1 hour
+      IdTokenValidity: 1      # 1 hour
+      RefreshTokenValidity: 30 # 30 days
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+
+  # ================================================
+  # LAMBDA FOR CUSTOM JWT CLAIMS
+  # ================================================
+  # This Lambda adds the tenant_id claim to JWT tokens
+  # It's triggered before Cognito generates tokens
+  PreTokenGenerationLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: upload-demo-pre-token-generation
+      CodeUri: ./lambda/pre-token/
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Environment:
+        Variables:
+          # Environment variables for the Lambda
+          LOG_LEVEL: INFO
+      Events:
+        # This Lambda is triggered by Cognito, not API Gateway
+        CognitoTrigger:
+          Type: CognitoUserPool
+          Properties:
+            UserPool: !Ref UserPool
+            Trigger: PreTokenGeneration
+
+  # Permission for Cognito to invoke the pre-token Lambda
+  PreTokenGenerationLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref PreTokenGenerationLambda
+      Action: lambda:InvokeFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
+
+  # ================================================
+  # S3 BUCKETS - File Storage
+  # ================================================
+  # Separate bucket for each tenant ensures data isolation
+  TenantABucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-store-tenant-a"
+      # Enable versioning for data protection
+      VersioningConfiguration:
+        Status: Enabled
+      # Block public access for security
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # Tagging for access control
+      Tags:
+        - Key: TenantId
+          Value: tenant-a
+        - Key: Purpose
+          Value: FileStorage
+
+  TenantBBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-store-tenant-b"
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: TenantId
+          Value: tenant-b
+        - Key: Purpose
+          Value: FileStorage
+
+  # ================================================
+  # IAM ROLE FOR MAIN LAMBDA FUNCTION
+  # ================================================
+  # This role allows the Lambda to assume different tenant contexts
+  # using session tags for fine-grained S3 access control
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-lambda-execution-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Basic Lambda execution permissions (CloudWatch Logs)
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        # Custom policy for S3 access with tag-based conditions
+        - PolicyName: TenantBasedS3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Allow STS operations to set session tags
+              - Effect: Allow
+                Action:
+                  - sts:TagSession
+                Resource: "*"
+              # S3 access conditioned on matching tenant tags
+              # This is the core of our multi-tenant security model
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource:
+                  - !Sub "${TenantABucket}/*"
+                  - !Sub "${TenantBBucket}/*"
+                Condition:
+                  StringEquals:
+                    # Only allow access if the principal's tenant tag
+                    # matches the resource's tenant tag
+                    "s3:ExistingObjectTag/TenantId": "${aws:PrincipalTag/TenantId}"
+              # Allow listing buckets (needed for S3 operations)
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt TenantABucket.Arn
+                  - !GetAtt TenantBBucket.Arn
+                Condition:
+                  StringEquals:
+                    "s3:ExistingBucketTag/TenantId": "${aws:PrincipalTag/TenantId}"
+
+  # ================================================
+  # MAIN LAMBDA FUNCTION - File Upload API
+  # ================================================
+  UploadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-upload-function"
+      CodeUri: ./
+      Handler: bootstrap
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          # Configuration passed to Lambda as environment variables
+          TENANT_A_BUCKET: !Ref TenantABucket
+          TENANT_B_BUCKET: !Ref TenantBBucket
+          USER_POOL_ID: !Ref UserPool
+          USER_POOL_CLIENT_ID: !Ref UserPoolClient
+          LOG_LEVEL: INFO
+      Events:
+        # API Gateway integration
+        Upload:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /upload
+            Method: POST
+            # Cognito authorizer ensures only authenticated users can access
+            Auth:
+              Authorizer: CognitoAuthorizer
+
+  # ================================================
+  # API GATEWAY - HTTP API Endpoint
+  # ================================================
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "${AWS::StackName}-api"
+      StageName: prod
+      # Cognito JWT authorizer configuration
+      Auth:
+        Authorizers:
+          CognitoAuthorizer:
+            UserPoolArn: !GetAtt UserPool.Arn
+            AuthType: COGNITO_USER_POOLS
+      # Custom domain configuration
+      Domain:
+        DomainName: !Sub "${ApiSubdomain}.${DomainName}"
+        CertificateArn: !Ref ApiCertificate
+        Route53:
+          HostedZoneId: !Ref HostedZone
+
+  # ================================================
+  # SSL CERTIFICATE - HTTPS Security
+  # ================================================
+  ApiCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub "${ApiSubdomain}.${DomainName}"
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub "${ApiSubdomain}.${DomainName}"
+          HostedZoneId: !Ref HostedZone
+
+  # ================================================
+  # ROUTE53 - DNS Configuration
+  # ================================================
+  # Reference to existing hosted zone (must already exist)
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: !Ref DomainName
+
+# ================================================
+# OUTPUTS - Information for other systems/testing
+# ================================================
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${ApiSubdomain}.${DomainName}/prod"
+    Export:
+      Name: !Sub "${AWS::StackName}-api-url"
+
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref UserPool
+    Export:
+      Name: !Sub "${AWS::StackName}-user-pool-id"
+
+  UserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !Ref UserPoolClient
+    Export:
+      Name: !Sub "${AWS::StackName}-user-pool-client-id"
+
+  TenantABucket:
+    Description: S3 bucket for tenant A
+    Value: !Ref TenantABucket
+    Export:
+      Name: !Sub "${AWS::StackName}-tenant-a-bucket"
+
+  TenantBBucket:
+    Description: S3 bucket for tenant B
+    Value: !Ref TenantBBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-tenant-b-bucket"
