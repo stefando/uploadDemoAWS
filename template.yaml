@@ -7,6 +7,7 @@ Globals:
   Function:
     Timeout: 30
     MemorySize: 256
+    # Using the provided.al2023 Lambda runtime for execution
     Runtime: provided.al2023
     Architectures:
       - x86_64
@@ -21,6 +22,11 @@ Parameters:
     Type: String
     Default: upload-api
     Description: Subdomain for the API endpoint
+    
+  HostedZoneId:
+    Type: String
+    Description: ID of the Route53 hosted zone for the domain
+    Default: ''
 
 Resources:
   # ================================================
@@ -86,20 +92,15 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: upload-demo-pre-token-generation
-      CodeUri: ./lambda/pre-token/
+      CodeUri: .aws-sam/build/PreTokenGenerationLambda/function.zip
       Handler: bootstrap
       Runtime: provided.al2023
       Environment:
         Variables:
           # Environment variables for the Lambda
           LOG_LEVEL: INFO
-      Events:
-        # This Lambda is triggered by Cognito, not API Gateway
-        CognitoTrigger:
-          Type: CognitoUserPool
-          Properties:
-            UserPool: !Ref UserPool
-            Trigger: PreTokenGeneration
+      # Lambda is associated with Cognito via LambdaConfig, not through Events
+      # SAM doesn't support Cognito triggers via the Events property
 
   # Permission for Cognito to invoke the pre-token Lambda
   PreTokenGenerationLambdaPermission:
@@ -154,8 +155,8 @@ Resources:
   # ================================================
   # IAM ROLE FOR MAIN LAMBDA FUNCTION
   # ================================================
-  # This role allows the Lambda to assume different tenant contexts
-  # using session tags for fine-grained S3 access control
+  # This role provides a single execution context with permissions
+  # to access our tenant buckets using a prefix-based policy
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -171,40 +172,22 @@ Resources:
         # Basic Lambda execution permissions (CloudWatch Logs)
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        # Custom policy for S3 access with tag-based conditions
+        # Custom policy for S3 access to tenant buckets
         - PolicyName: TenantBasedS3Access
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              # Allow STS operations to set session tags
-              - Effect: Allow
-                Action:
-                  - sts:TagSession
-                Resource: "*"
-              # S3 access conditioned on matching tenant tags
-              # This is the core of our multi-tenant security model
+              # Allow S3 operations on all tenant buckets with our prefix
               - Effect: Allow
                 Action:
                   - s3:PutObject
                   - s3:GetObject
-                Resource:
-                  - !Sub "${TenantABucket}/*"
-                  - !Sub "${TenantBBucket}/*"
-                Condition:
-                  StringEquals:
-                    # Only allow access if the principal's tenant tag
-                    # matches the resource's tenant tag
-                    "s3:ExistingObjectTag/TenantId": "${aws:PrincipalTag/TenantId}"
-              # Allow listing buckets (needed for S3 operations)
-              - Effect: Allow
-                Action:
                   - s3:ListBucket
                 Resource:
                   - !GetAtt TenantABucket.Arn
                   - !GetAtt TenantBBucket.Arn
-                Condition:
-                  StringEquals:
-                    "s3:ExistingBucketTag/TenantId": "${aws:PrincipalTag/TenantId}"
+                  - !Sub "${TenantABucket.Arn}/*"
+                  - !Sub "${TenantBBucket.Arn}/*"
 
   # ================================================
   # MAIN LAMBDA FUNCTION - File Upload API
@@ -213,7 +196,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub "${AWS::StackName}-upload-function"
-      CodeUri: ./
+      CodeUri: .aws-sam/build/UploadFunction/function.zip
       Handler: bootstrap
       Role: !GetAtt LambdaExecutionRole.Arn
       Environment:
@@ -255,7 +238,7 @@ Resources:
         DomainName: !Sub "${ApiSubdomain}.${DomainName}"
         CertificateArn: !Ref ApiCertificate
         Route53:
-          HostedZoneId: !Ref HostedZone
+          HostedZoneId: !Ref HostedZoneId
 
   # ================================================
   # SSL CERTIFICATE - HTTPS Security
@@ -267,16 +250,9 @@ Resources:
       ValidationMethod: DNS
       DomainValidationOptions:
         - DomainName: !Sub "${ApiSubdomain}.${DomainName}"
-          HostedZoneId: !Ref HostedZone
+          HostedZoneId: !Ref HostedZoneId
 
-  # ================================================
-  # ROUTE53 - DNS Configuration
-  # ================================================
-  # Reference to existing hosted zone (must already exist)
-  HostedZone:
-    Type: AWS::Route53::HostedZone
-    Properties:
-      Name: !Ref DomainName
+  # No need to define HostedZone resource as we're using the HostedZoneId parameter
 
 # ================================================
 # OUTPUTS - Information for other systems/testing

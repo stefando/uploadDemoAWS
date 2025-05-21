@@ -92,3 +92,128 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
 - Comments focus on AWS concepts and Go Lambda patterns
 - Modern idiomatic Go with proper error handling
 - Chi router for HTTP routing (future expansion)
+
+## Demo and Testing Instructions
+
+### Deployment Process
+1. Build the Lambda functions:
+   ```bash
+   task build
+   ```
+
+2. Package the application for deployment:
+   ```bash
+   task sam-package
+   ```
+
+3. Deploy the CloudFormation stack:
+   ```bash
+   task deploy
+   ```
+
+### Setting Up Test Users
+
+After deployment, you need to create and configure Cognito users for testing:
+
+1. Create user for tenant-a:
+   ```bash
+   aws cognito-idp admin-create-user \
+     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text) \
+     --username user-tenant-a \
+     --message-action SUPPRESS \
+     --temporary-password TempPass123! \
+     --profile personal \
+     --region eu-central-1
+   ```
+
+2. Set permanent password for tenant-a user:
+   ```bash
+   aws cognito-idp admin-set-user-password \
+     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text) \
+     --username user-tenant-a \
+     --password TestPass123! \
+     --permanent \
+     --profile personal \
+     --region eu-central-1
+   ```
+
+3. Create user for tenant-b:
+   ```bash
+   aws cognito-idp admin-create-user \
+     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text) \
+     --username user-tenant-b \
+     --message-action SUPPRESS \
+     --temporary-password TempPass123! \
+     --profile personal \
+     --region eu-central-1
+   ```
+
+4. Set permanent password for tenant-b user:
+   ```bash
+   aws cognito-idp admin-set-user-password \
+     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text) \
+     --username user-tenant-b \
+     --password TestPass123! \
+     --permanent \
+     --profile personal \
+     --region eu-central-1
+   ```
+
+### Authentication and API Testing
+
+1. Get authentication token for tenant-a:
+   ```bash
+   aws cognito-idp initiate-auth \
+     --auth-flow USER_PASSWORD_AUTH \
+     --client-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" --output text) \
+     --auth-parameters USERNAME=user-tenant-a,PASSWORD=TestPass123! \
+     --profile personal \
+     --region eu-central-1
+   ```
+
+2. Store the token in an environment variable:
+   ```bash
+   export TOKEN_A=$(aws cognito-idp initiate-auth --auth-flow USER_PASSWORD_AUTH --client-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" --output text) --auth-parameters USERNAME=user-tenant-a,PASSWORD=TestPass123! --profile personal --region eu-central-1 --query "AuthenticationResult.IdToken" --output text)
+   ```
+
+3. Upload a file as tenant-a:
+   ```bash
+   curl -X POST \
+     $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)/upload \
+     -H "Authorization: Bearer $TOKEN_A" \
+     -H "Content-Type: application/json" \
+     -d '{"key1": "value1", "tenant": "a", "timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"}'
+   ```
+
+4. Get authentication token for tenant-b:
+   ```bash
+   export TOKEN_B=$(aws cognito-idp initiate-auth --auth-flow USER_PASSWORD_AUTH --client-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" --output text) --auth-parameters USERNAME=user-tenant-b,PASSWORD=TestPass123! --profile personal --region eu-central-1 --query "AuthenticationResult.IdToken" --output text)
+   ```
+
+5. Upload a file as tenant-b:
+   ```bash
+   curl -X POST \
+     $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)/upload \
+     -H "Authorization: Bearer $TOKEN_B" \
+     -H "Content-Type: application/json" \
+     -d '{"key1": "value1", "tenant": "b", "timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"}'
+   ```
+
+### Verifying Tenant Isolation
+
+1. List files in tenant-a bucket:
+   ```bash
+   aws s3 ls s3://$(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='TenantABucket'].OutputValue" --output text)/$(date +"%Y/%m/%d/") --recursive --profile personal --region eu-central-1
+   ```
+
+2. List files in tenant-b bucket:
+   ```bash
+   aws s3 ls s3://$(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='TenantBBucket'].OutputValue" --output text)/$(date +"%Y/%m/%d/") --recursive --profile personal --region eu-central-1
+   ```
+
+### Cleanup
+
+To delete the entire stack and resources:
+```bash
+aws cloudformation delete-stack --stack-name upload-demo-stack --profile personal --region eu-central-1
+```

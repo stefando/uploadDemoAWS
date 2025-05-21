@@ -11,11 +11,16 @@ s3_bucket = ""  # SAM will create a deployment bucket automatically
 s3_prefix = "upload-demo"
 region = ""     # Will use AWS profile's default region
 confirm_changeset = false
-capabilities = "CAPABILITY_NAMED_IAM"
-parameter_overrides = []
+capabilities = "CAPABILITY_NAMED_IAM"  # Required because we use explicit RoleName in IAM resources
+parameter_overrides = "HostedZoneId=\"Z0931647ZKADRPMD2SHG\""
 image_repositories = []
 
 [default.build]
 [default.build.parameters]
+# Don't use containers since we're pre-building our binaries 
+use_container = false
+skip_pull_image = true
+# Skip build commands since we build with taskfile.dev
+skip_build_commands = true
 parallel = true
 cached = true

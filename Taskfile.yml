@@ -5,35 +5,42 @@ version: '3'
 
 vars:
   AWS_PROFILE: personal
-  BINARY_NAME: bootstrap
+  MAIN_BINARY: bootstrap
+  PRETOKEN_BINARY: lambda/pre-token/bootstrap
   BUILD_DIR: .aws-sam/build
 
 tasks:
-  # Build the Lambda function binary for Linux
+  # Build all Lambda function binaries for Linux
   build:
-    desc: Build Go Lambda function for Linux AMD64
+    desc: Build all Go Lambda functions for Linux AMD64
     cmds:
-      - GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o {{.BINARY_NAME}} ./cmd/lambda
+      - ./build.sh
     sources:
-      - "**/*.go"
+      - "cmd/lambda/**/*.go"
+      - "internal/**/*.go"
+      - "lambda/pre-token/**/*.go"
       - go.mod
       - go.sum
+      - build.sh
     generates:
-      - "{{.BINARY_NAME}}"
+      - ".aws-sam/build/UploadFunction/function.zip"
+      - ".aws-sam/build/PreTokenGenerationLambda/function.zip"
 
-  # Build using SAM for local testing
-  sam-build:
-    desc: Build using SAM CLI
+  # Package pre-built functions and prepare for deployment
+  sam-package:
+    desc: Package SAM application with pre-built binaries
     cmds:
-      - sam build --profile {{.AWS_PROFILE}}
-    deps: [build]
+      # First build Go binaries with our script
+      - task: build
+      # Use SAM package command to create deployment package
+      - sam package --s3-bucket aws-sam-cli-managed-default-samclisourcebucket-gjzdgbfvwjgj --output-template-file packaged.yaml --profile {{.AWS_PROFILE}} --region eu-central-1
 
   # Deploy the complete stack
   deploy:
     desc: Deploy the CloudFormation stack using SAM
     cmds:
-      - task: sam-build
-      - sam deploy --profile {{.AWS_PROFILE}}
+      - task: sam-package
+      - sam deploy --template-file packaged.yaml --profile {{.AWS_PROFILE}} --capabilities CAPABILITY_NAMED_IAM --region eu-central-1 --no-fail-on-empty-changeset
 
   # Start local API for testing
   local:
