@@ -20,6 +20,11 @@ go.sum
 # AWS SAM build artifacts
 .aws-sam/
 samconfig.toml.bak
+packaged.yaml
+samconfig.toml
+
+# Lambda binaries
+lambda/*/bootstrap
 
 # IDE files
 .vscode/

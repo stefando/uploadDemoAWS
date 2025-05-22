@@ -60,12 +60,30 @@ func ValidateToken(tokenStr string) (string, error) {
 	return tenant, nil
 }
 
-func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest) (events.APIGatewayCustomAuthorizerResponse, error) {
-	log.Printf("🚀 AUTHORIZER INVOKED: Starting authorization for %s", event.MethodArn)
-	log.Printf("🎟️  Authorization Token Present: %v", event.AuthorizationToken != "")
+func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequestTypeRequest) (events.APIGatewayCustomAuthorizerResponse, error) {
+	log.Printf("🚀 REQUEST AUTHORIZER INVOKED: Starting authorization for %s", event.MethodArn)
+	log.Printf("📋 REQUEST INFO: %s %s", event.HTTPMethod, event.Path)
+	log.Printf("🌐 Stage: %s, RequestID: %s", event.RequestContext.Stage, event.RequestContext.RequestID)
 	
-	// TOKEN type should strip "Bearer " but sometimes doesn't - handle it
-	token := event.AuthorizationToken
+	// Log all available headers for debugging
+	log.Printf("📋 All Headers: %+v", event.Headers)
+	
+	// Extract X-Auth-Token header from REQUEST event (avoiding AWS Authorization header processing)
+	authHeader, exists := event.Headers["X-Auth-Token"]
+	if !exists {
+		authHeader, exists = event.Headers["x-auth-token"] // Try lowercase
+	}
+	
+	log.Printf("🎟️  X-Auth-Token Header Present: %v (looking for: X-Auth-Token or x-auth-token)", exists)
+	if !exists {
+		log.Printf("❌ AUTHORIZATION FAILED: No X-Auth-Token header found")
+		return events.APIGatewayCustomAuthorizerResponse{
+			PrincipalID:    "unauthorized",
+			PolicyDocument: generatePolicy("Deny", event.MethodArn),
+		}, nil
+	}
+	
+	token := authHeader
 	log.Printf("🔍 Raw token received (length: %d): %s", len(token), token)
 	
 	// Handle case-insensitive "Bearer " prefix stripping

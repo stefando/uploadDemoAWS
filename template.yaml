@@ -298,20 +298,22 @@ Resources:
         Authorizers:
           # Lambda authorizer for Cognito JWT validation + tenant verification
           TenantVerificationAuthorizer:
-            FunctionPayloadType: TOKEN
+            FunctionPayloadType: REQUEST
             FunctionArn: !GetAtt TenantAuthorizerFunction.Arn
             AuthorizerResultTtlInSeconds: 0
             Identity:
-              Header: Authorization
+              Headers:
+                - X-Auth-Token
       # CORS configuration for web clients
       Cors:
         AllowMethods: "'GET,POST,OPTIONS'"
-        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Auth-Token'"
         AllowOrigin: "'*'"
       # Custom domain configuration
       Domain:
         DomainName: !Sub "${ApiSubdomain}.${DomainName}"
         CertificateArn: !Ref ApiCertificate
+        EndpointConfiguration: REGIONAL
         Route53:
           HostedZoneId: !Ref HostedZoneId
 
