@@ -13,24 +13,23 @@ import (
 
 // UploadService handles file uploads to S3 with tenant isolation
 type UploadService struct {
-	s3Client    *s3.Client
-	bucketNames map[string]string // Maps tenant IDs to bucket names
+	s3Client   *s3.Client
+	bucketName string // Single shared bucket for all tenants
 }
 
 // NewUploadService creates a new upload service with the provided S3 client
-func NewUploadService(s3Client *s3.Client, tenantBuckets map[string]string) *UploadService {
+func NewUploadService(s3Client *s3.Client, bucketName string) *UploadService {
 	return &UploadService{
-		s3Client:    s3Client,
-		bucketNames: tenantBuckets,
+		s3Client:   s3Client,
+		bucketName: bucketName,
 	}
 }
 
-// UploadFile uploads a file to the tenant's S3 bucket with proper path formatting
+// UploadFile uploads a file to the shared S3 bucket with tenant-prefixed path
 func (s *UploadService) UploadFile(ctx context.Context, tenantID string, content []byte) (string, error) {
-	// Get the bucket name for this tenant
-	bucketName, ok := s.bucketNames[tenantID]
-	if !ok {
-		return "", fmt.Errorf("unknown tenant ID: %s", tenantID)
+	// Validate tenant ID
+	if tenantID == "" {
+		return "", fmt.Errorf("tenant ID cannot be empty")
 	}
 
 	// Generate timestamp-based path (YYYY/MM/DD)
@@ -39,11 +38,12 @@ func (s *UploadService) UploadFile(ctx context.Context, tenantID string, content
 	
 	// Generate a unique filename using UUID
 	fileID := uuid.New().String()
-	key := fmt.Sprintf("%s/%s.json", datePath, fileID)
+	// Include tenant ID as prefix in the path: //<tenant>/YYYY/MM/DD/<guid>.json
+	key := fmt.Sprintf("%s/%s/%s.json", tenantID, datePath, fileID)
 	
 	// Create the S3 PutObject input
 	input := &s3.PutObjectInput{
-		Bucket: aws.String(bucketName),
+		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(key),
 		Body:   strings.NewReader(string(content)),
 		// Add content type for JSON

@@ -36,17 +36,16 @@ func init() {
 	// Initialize S3 client
 	s3Client = s3.NewFromConfig(cfg)
 
-	// Create a mapping of tenant IDs to bucket names
-	// In a real app, this could come from a database or configuration service
-	tenantBuckets := map[string]string{
-		"tenant-a": os.Getenv("TENANT_A_BUCKET"),
-		"tenant-b": os.Getenv("TENANT_B_BUCKET"),
+	// Get the shared bucket name from environment variable
+	sharedBucket := os.Getenv("SHARED_BUCKET")
+	if sharedBucket == "" {
+		log.Fatal("SHARED_BUCKET environment variable not set")
 	}
 
-	// Initialize upload service
-	uploadService = upload.NewUploadService(s3Client, tenantBuckets)
+	// Initialize upload service with the shared bucket
+	uploadService = upload.NewUploadService(s3Client, sharedBucket)
 
-	log.Printf("Services initialized with tenant buckets: %v", tenantBuckets)
+	log.Printf("Services initialized with shared bucket: %s", sharedBucket)
 }
 
 // setupRouter creates and configures the Chi router
@@ -133,15 +132,16 @@ func lambdaHandler(ctx context.Context, req events.APIGatewayProxyRequest) (even
 		}, nil
 	}
 
-	// Extract tenant ID from API Gateway Cognito authorizer claims
+	// Extract tenant ID from API Gateway REQUEST authorizer context
 	if req.RequestContext.Authorizer != nil {
-		if claims, ok := req.RequestContext.Authorizer["claims"].(map[string]interface{}); ok {
-			if tenantID, exists := claims["tenant_id"].(string); exists && tenantID != "" {
-				// Add tenant ID directly to request context (bypass JWT parsing)
-				ctx = auth.WithTenantID(httpReq.Context(), tenantID)
-				httpReq = httpReq.WithContext(ctx)
-				log.Printf("Tenant ID from API Gateway claims: %s", tenantID)
-			}
+		// For REQUEST authorizers, context is directly in Authorizer map
+		if tenantID, exists := req.RequestContext.Authorizer["tenant_id"].(string); exists && tenantID != "" {
+			// Add tenant ID directly to request context
+			ctx = auth.WithTenantID(httpReq.Context(), tenantID)
+			httpReq = httpReq.WithContext(ctx)
+			log.Printf("Tenant ID from REQUEST authorizer context: %s", tenantID)
+		} else {
+			log.Printf("No tenant_id found in authorizer context: %+v", req.RequestContext.Authorizer)
 		}
 	}
 

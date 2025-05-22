@@ -14,22 +14,22 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
 
 ### Core Architecture
 - **AWS Lambda Function:** Single endpoint `/upload` (expandable with Chi router)
-- **Multi-tenancy:** Two tenants (`tenant-a`, `tenant-b`) with separate S3 buckets
+- **Multi-tenancy:** Two tenants (`tenant-a`, `tenant-b`) with shared S3 bucket using tenant-prefixed paths
 - **Authentication:** AWS Cognito User Pool producing JWT tokens with tenant claims
-- **Storage:** S3 buckets (`store-tenant-a`, `store-tenant-b`) with file format `YYYY/MM/DD/<guid>.json`
+- **Storage:** Single shared S3 bucket (`store-shared`) with tenant-prefixed file format `<tenant-id>/YYYY/MM/DD/<guid>.json`
 - **Security:** Resource tag → session tag matching for S3 access control
 - **Deployment:** CloudFormation/SAM with Route53 integration on `stefando.me`
 
 ### Security Model
 - Cognito User Pool with V2_0 pre-token generation adds `tenant_id` claim to both ID and access tokens
-- API Gateway uses Lambda authorizer with **access tokens** (not ID tokens)
+- API Gateway uses REQUEST type Lambda authorizer with **access tokens** sent via X-Auth-Token header
 - Lambda authorizer validates JWT tokens using OIDC and extracts tenant information
-- **Current Implementation:** Basic IAM permissions allow access to all tenant buckets
-- **Authorization Chain:** TOKEN type Lambda authorizer → OIDC JWT validation → tenant extraction → S3 access
+- **Current Implementation:** Basic IAM permissions allow access to entire shared bucket
+- **Authorization Chain:** REQUEST type Lambda authorizer → OIDC JWT validation → tenant extraction → S3 access
 
 ### Deployment Strategy
 - Use `provided.al2023` runtime with compiled Go binary named `bootstrap`
-- CloudFormation template includes: Lambda, API Gateway, Cognito, S3 buckets, IAM roles
+- CloudFormation template includes: Lambda, API Gateway, Cognito, S3 bucket, IAM roles
 - Single command deployment/teardown via SAM CLI
 - Custom domain integration with existing Route53 hosted zone
 
@@ -57,36 +57,36 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
 ## Architecture Details
 
 ### Multi-tenant Flow
-1. User authenticates with Cognito → receives ID token with `tenant_id` claim (via V2_0 pre-token generation)
-2. API request includes ID token as Bearer token 
-3. API Gateway Cognito User Pool authorizer validates ID token
-4. Lambda extracts tenant information from API Gateway request context claims
-5. **Current:** Lambda uses tenant-specific bucket based on extracted tenant_id
+1. User authenticates with Cognito → receives access token with `tenant_id` claim (via V2_0 pre-token generation)
+2. API request includes access token in X-Auth-Token header
+3. API Gateway invokes REQUEST type Lambda authorizer for validation
+4. Lambda authorizer validates JWT using OIDC and returns tenant information in context
+5. **Current:** Lambda stores files in shared bucket with tenant-prefixed paths
 6. **TODO:** Implement session tag-based S3 access control for security isolation
 
 ### File Storage Pattern
-- Path: `s3://store-{tenant-id}/YYYY/MM/DD/{guid}.json`
-- Each tenant has isolated storage with date-based organization
+- Path: `s3://store-shared/{tenant-id}/YYYY/MM/DD/{guid}.json`
+- Single bucket with tenant-prefixed paths for isolation
 - GUID ensures unique filenames within daily folders
 
 ### Security Layers
-1. **API Gateway:** Cognito User Pool authorizer validates ID tokens 
-2. **Lambda Function:** Extracts tenant claims from API Gateway request context
-3. **Current IAM:** Basic permissions allow access to all tenant buckets
+1. **API Gateway:** REQUEST type Lambda authorizer validates access tokens from X-Auth-Token header
+2. **Lambda Function:** Extracts tenant claims from authorizer context
+3. **Current IAM:** Basic permissions allow access to entire shared bucket
 4. **TODO:** Implement tag-based IAM policies and S3 bucket policies for tenant isolation
 
 ## Cognito Configuration
 - **User Pool:** Manages user accounts and authentication with V2_0 pre-token generation
 - **User Pool Client:** Handles JWT token generation and validation
 - **Custom Claims:** Tenant ID embedded in both ID and access token payloads via pre-token Lambda
-- **Token Usage:** API Gateway authorizer uses **ID tokens** (not access tokens)
+- **Token Usage:** Lambda authorizer uses **access tokens** (not ID tokens) via X-Auth-Token header
 - **Hardcoded Users:** `user-tenant-a` and `user-tenant-b` for demo purposes
 
 ## AWS Resources Created
 - Lambda Function with execution role
 - API Gateway with custom domain
 - Cognito User Pool and Client
-- S3 buckets with tag-based policies
+- Single S3 bucket with tenant-prefixed storage
 - IAM roles and policies for tag-based access
 - Route53 record for API endpoint (using existing hosted zone)
 
@@ -164,7 +164,7 @@ After deployment, you need to create and configure Cognito users for testing:
 
 ### Authentication and API Testing
 
-**IMPORTANT:** Use the direct API Gateway endpoint, not the custom domain, for testing authorization.
+Both the custom domain (upload-api.stefando.me) and direct API Gateway endpoint can be used for testing.
 
 #### Step 1: Get Access Tokens
 
@@ -203,22 +203,40 @@ echo "Direct API endpoint: https://${API_ID}.execute-api.eu-central-1.amazonaws.
 
 #### Step 3: Test Upload with Correct curl Switches
 
-Use verbose curl without progress meter:
+Use verbose curl without progress meter. You can use either the direct API Gateway endpoint or the custom domain:
 
-1. Upload as tenant-a:
+1. Upload as tenant-a (using direct endpoint):
    ```bash
    curl -v -s -X POST \
      https://${API_ID}.execute-api.eu-central-1.amazonaws.com/prod/upload \
-     -H "Authorization: Bearer [ACCESS_TOKEN_A]" \
+     -H "X-Auth-Token: [ACCESS_TOKEN_A]" \
      -H "Content-Type: application/json" \
      -d '{"test": "data from tenant-a"}'
    ```
 
-2. Upload as tenant-b:
+   Or using custom domain:
+   ```bash
+   curl -v -s -X POST \
+     https://upload-api.stefando.me/upload \
+     -H "X-Auth-Token: [ACCESS_TOKEN_A]" \
+     -H "Content-Type: application/json" \
+     -d '{"test": "data from tenant-a"}'
+   ```
+
+2. Upload as tenant-b (using direct endpoint):
    ```bash
    curl -v -s -X POST \
      https://${API_ID}.execute-api.eu-central-1.amazonaws.com/prod/upload \
-     -H "Authorization: Bearer [ACCESS_TOKEN_B]" \
+     -H "X-Auth-Token: [ACCESS_TOKEN_B]" \
+     -H "Content-Type: application/json" \
+     -d '{"test": "data from tenant-b"}'
+   ```
+
+   Or using custom domain:
+   ```bash
+   curl -v -s -X POST \
+     https://upload-api.stefando.me/upload \
+     -H "X-Auth-Token: [ACCESS_TOKEN_B]" \
      -H "Content-Type: application/json" \
      -d '{"test": "data from tenant-b"}'
    ```
@@ -230,19 +248,24 @@ Use verbose curl without progress meter:
 
 #### Expected Success Response:
 ```json
-{"file_path":"2025/05/22/[guid].json","status":"success","tenant_id":"tenant-a"}
+{"file_path":"tenant-a/2025/05/22/[guid].json","status":"success","tenant_id":"tenant-a"}
 ```
 
 ### Verifying Tenant Isolation
 
-1. List files in tenant-a bucket:
+1. List all files in the shared bucket (shows tenant prefixes):
    ```bash
-   aws s3 ls s3://$(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='TenantABucket'].OutputValue" --output text)/$(date +"%Y/%m/%d/") --recursive --profile personal --region eu-central-1
+   aws s3 ls s3://$(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='SharedStorageBucket'].OutputValue" --output text)/ --recursive --profile personal --region eu-central-1
    ```
 
-2. List files in tenant-b bucket:
+2. List files for tenant-a only:
    ```bash
-   aws s3 ls s3://$(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='TenantBBucket'].OutputValue" --output text)/$(date +"%Y/%m/%d/") --recursive --profile personal --region eu-central-1
+   aws s3 ls s3://$(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='SharedStorageBucket'].OutputValue" --output text)/tenant-a/ --recursive --profile personal --region eu-central-1
+   ```
+
+3. List files for tenant-b only:
+   ```bash
+   aws s3 ls s3://$(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='SharedStorageBucket'].OutputValue" --output text)/tenant-b/ --recursive --profile personal --region eu-central-1
    ```
 
 ### Cleanup
@@ -253,9 +276,9 @@ aws cloudformation delete-stack --stack-name upload-demo-stack --profile persona
 ```
 
 ## Memory Notes
-- **Authorization Chain Working:** TOKEN type Lambda authorizer validates access tokens using OIDC library
-- **Custom Domain Issue:** Custom domain (upload-api.stefando.me) has authorization issues - use direct API Gateway endpoint
+- **Authorization Chain:** REQUEST type Lambda authorizer validates access tokens using OIDC library
+- **Custom Domain:** REGIONAL endpoint configuration enables custom domain support (upload-api.stefando.me)
 - **curl Commands:** Always use `curl -v -s` (verbose without progress meter) for debugging authorization
-- **Access Tokens:** Use AccessToken (not IdToken) with Lambda authorizer for proper tenant_id extraction
-- **Bearer Prefix:** Lambda authorizer properly strips "Bearer " prefix from authorization header (case insensitive)
+- **Access Tokens:** Use AccessToken (not IdToken) sent via X-Auth-Token header to avoid AWS SigV4 conflicts
+- **Header Processing:** Lambda authorizer extracts token from X-Auth-Token header (case-insensitive)
 - **Direct API Endpoint:** Use `https://{api-id}.execute-api.{region}.amazonaws.com/{stage}` format for testing

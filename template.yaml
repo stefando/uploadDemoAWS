@@ -123,40 +123,23 @@ Resources:
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/authorizers/*"
 
   # ================================================
-  # S3 BUCKETS - File Storage
+  # S3 BUCKET - Shared Storage with Tenant Prefixes
   # ================================================
-  # Separate bucket for each tenant ensures data isolation
-  TenantABucket:
+  # Single bucket with tenant-prefixed paths for multi-tenant isolation
+  SharedStorageBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "${AWS::StackName}-store-tenant-a"
+      BucketName: !Sub "${AWS::StackName}-store-shared"
       # Block public access for security
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
-      # Tagging for access control
+      # Tagging for identification
       Tags:
-        - Key: TenantId
-          Value: tenant-a
         - Key: Purpose
-          Value: FileStorage
-
-  TenantBBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub "${AWS::StackName}-store-tenant-b"
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      Tags:
-        - Key: TenantId
-          Value: tenant-b
-        - Key: Purpose
-          Value: FileStorage
+          Value: MultiTenantFileStorage
 
   # ================================================
   # IAM ROLE FOR MAIN LAMBDA FUNCTION
@@ -190,10 +173,8 @@ Resources:
                   - s3:GetObject
                   - s3:ListBucket
                 Resource:
-                  - !GetAtt TenantABucket.Arn
-                  - !GetAtt TenantBBucket.Arn
-                  - !Sub "${TenantABucket.Arn}/*"
-                  - !Sub "${TenantBBucket.Arn}/*"
+                  - !GetAtt SharedStorageBucket.Arn
+                  - !Sub "${SharedStorageBucket.Arn}/*"
 
   # ================================================
   # MAIN LAMBDA FUNCTION - File Upload API
@@ -208,8 +189,7 @@ Resources:
       Environment:
         Variables:
           # Configuration passed to Lambda as environment variables
-          TENANT_A_BUCKET: !Ref TenantABucket
-          TENANT_B_BUCKET: !Ref TenantBBucket
+          SHARED_BUCKET: !Ref SharedStorageBucket
           USER_POOL_ID: !Ref UserPool
           USER_POOL_CLIENT_ID: !Ref UserPoolClient
           LOG_LEVEL: INFO
@@ -316,6 +296,10 @@ Resources:
         EndpointConfiguration: REGIONAL
         Route53:
           HostedZoneId: !Ref HostedZoneId
+        # Explicit base path mapping: root path (/) maps to prod stage
+        BasePath: 
+          - Path: /
+            Stage: prod
 
   # ================================================
   # SSL CERTIFICATE - HTTPS Security
@@ -336,8 +320,8 @@ Resources:
 # ================================================
 Outputs:
   ApiUrl:
-    Description: API Gateway endpoint URL
-    Value: !Sub "https://${ApiSubdomain}.${DomainName}/prod"
+    Description: Custom domain API endpoint URL
+    Value: !Sub "https://${ApiSubdomain}.${DomainName}"
     Export:
       Name: !Sub "${AWS::StackName}-api-url"
 
@@ -353,14 +337,8 @@ Outputs:
     Export:
       Name: !Sub "${AWS::StackName}-user-pool-client-id"
 
-  TenantABucket:
-    Description: S3 bucket for tenant A
-    Value: !Ref TenantABucket
+  SharedStorageBucket:
+    Description: Shared S3 bucket for all tenants
+    Value: !Ref SharedStorageBucket
     Export:
-      Name: !Sub "${AWS::StackName}-tenant-a-bucket"
-
-  TenantBBucket:
-    Description: S3 bucket for tenant B
-    Value: !Ref TenantBBucket
-    Export:
-      Name: !Sub "${AWS::StackName}-tenant-b-bucket"
+      Name: !Sub "${AWS::StackName}-shared-bucket"
