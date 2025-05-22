@@ -22,10 +22,10 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
 
 ### Security Model
 - Cognito User Pool with V2_0 pre-token generation adds `tenant_id` claim to both ID and access tokens
-- API Gateway uses Cognito User Pool authorizer with **ID tokens** (not access tokens)
-- Lambda extracts tenant information from API Gateway request context claims
+- API Gateway uses Lambda authorizer with **access tokens** (not ID tokens)
+- Lambda authorizer validates JWT tokens using OIDC and extracts tenant information
 - **Current Implementation:** Basic IAM permissions allow access to all tenant buckets
-- **TODO:** Implement session tag-based S3 policies for true tenant isolation
+- **Authorization Chain:** TOKEN type Lambda authorizer → OIDC JWT validation → tenant extraction → S3 access
 
 ### Deployment Strategy
 - Use `provided.al2023` runtime with compiled Go binary named `bootstrap`
@@ -164,43 +164,74 @@ After deployment, you need to create and configure Cognito users for testing:
 
 ### Authentication and API Testing
 
-1. Get authentication token for tenant-a:
+**IMPORTANT:** Use the direct API Gateway endpoint, not the custom domain, for testing authorization.
+
+#### Step 1: Get Access Tokens
+
+1. Get access token for tenant-a:
    ```bash
    aws cognito-idp initiate-auth \
      --auth-flow USER_PASSWORD_AUTH \
      --client-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" --output text) \
      --auth-parameters USERNAME=user-tenant-a,PASSWORD=TestPass123! \
      --profile personal \
-     --region eu-central-1
+     --region eu-central-1 \
+     --query "AuthenticationResult.AccessToken" --output text
    ```
 
-2. Store the token in an environment variable:
+2. Get access token for tenant-b:
    ```bash
-   export TOKEN_A=$(aws cognito-idp initiate-auth --auth-flow USER_PASSWORD_AUTH --client-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" --output text) --auth-parameters USERNAME=user-tenant-a,PASSWORD=TestPass123! --profile personal --region eu-central-1 --query "AuthenticationResult.IdToken" --output text)
+   aws cognito-idp initiate-auth \
+     --auth-flow USER_PASSWORD_AUTH \
+     --client-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" --output text) \
+     --auth-parameters USERNAME=user-tenant-b,PASSWORD=TestPass123! \
+     --profile personal \
+     --region eu-central-1 \
+     --query "AuthenticationResult.AccessToken" --output text
    ```
 
-3. Upload a file as tenant-a:
+#### Step 2: Get API Gateway Direct Endpoint
+
+Get the API Gateway ID and construct the direct endpoint:
+```bash
+# Get API Gateway ID
+API_ID=$(aws apigateway get-rest-apis --profile personal --region eu-central-1 --query "items[?name=='upload-demo-stack-api'].id" --output text)
+
+# Direct endpoint format: https://{api-id}.execute-api.{region}.amazonaws.com/{stage}
+echo "Direct API endpoint: https://${API_ID}.execute-api.eu-central-1.amazonaws.com/prod"
+```
+
+#### Step 3: Test Upload with Correct curl Switches
+
+Use verbose curl without progress meter:
+
+1. Upload as tenant-a:
    ```bash
-   curl -X POST \
-     $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)/upload \
-     -H "Authorization: Bearer $TOKEN_A" \
+   curl -v -s -X POST \
+     https://${API_ID}.execute-api.eu-central-1.amazonaws.com/prod/upload \
+     -H "Authorization: Bearer [ACCESS_TOKEN_A]" \
      -H "Content-Type: application/json" \
-     -d '{"key1": "value1", "tenant": "a", "timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"}'
+     -d '{"test": "data from tenant-a"}'
    ```
 
-4. Get authentication token for tenant-b:
+2. Upload as tenant-b:
    ```bash
-   export TOKEN_B=$(aws cognito-idp initiate-auth --auth-flow USER_PASSWORD_AUTH --client-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" --output text) --auth-parameters USERNAME=user-tenant-b,PASSWORD=TestPass123! --profile personal --region eu-central-1 --query "AuthenticationResult.IdToken" --output text)
-   ```
-
-5. Upload a file as tenant-b:
-   ```bash
-   curl -X POST \
-     $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)/upload \
-     -H "Authorization: Bearer $TOKEN_B" \
+   curl -v -s -X POST \
+     https://${API_ID}.execute-api.eu-central-1.amazonaws.com/prod/upload \
+     -H "Authorization: Bearer [ACCESS_TOKEN_B]" \
      -H "Content-Type: application/json" \
-     -d '{"key1": "value1", "tenant": "b", "timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"}'
+     -d '{"test": "data from tenant-b"}'
    ```
+
+**curl switches explained:**
+- `-v`: Verbose output (shows headers and connection details)
+- `-s`: Silent mode (no progress meter or timing information)
+- `-X POST`: HTTP method (can be omitted as POST is inferred from data)
+
+#### Expected Success Response:
+```json
+{"file_path":"2025/05/22/[guid].json","status":"success","tenant_id":"tenant-a"}
+```
 
 ### Verifying Tenant Isolation
 
@@ -220,3 +251,11 @@ To delete the entire stack and resources:
 ```bash
 aws cloudformation delete-stack --stack-name upload-demo-stack --profile personal --region eu-central-1
 ```
+
+## Memory Notes
+- **Authorization Chain Working:** TOKEN type Lambda authorizer validates access tokens using OIDC library
+- **Custom Domain Issue:** Custom domain (upload-api.stefando.me) has authorization issues - use direct API Gateway endpoint
+- **curl Commands:** Always use `curl -v -s` (verbose without progress meter) for debugging authorization
+- **Access Tokens:** Use AccessToken (not IdToken) with Lambda authorizer for proper tenant_id extraction
+- **Bearer Prefix:** Lambda authorizer properly strips "Bearer " prefix from authorization header (case insensitive)
+- **Direct API Endpoint:** Use `https://{api-id}.execute-api.{region}.amazonaws.com/{stage}` format for testing

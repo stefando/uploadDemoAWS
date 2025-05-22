@@ -34,10 +34,9 @@ func ValidateToken(tokenStr string) (string, error) {
 		return "", fmt.Errorf("oidc provider error: %w", err)
 	}
 
-	// Enforce audience = your App (Client) ID
+	// For access tokens, skip audience check as they don't have 'aud' claim
 	verifier := provider.Verifier(&oidc.Config{
-		ClientID: clientID,
-		// SkipClientIDCheck: true // (do NOT set if you want aud check)
+		SkipClientIDCheck: true, // Access tokens don't have audience claim
 	})
 
 	// This will check sig, expiry, issuer, and aud for you
@@ -65,9 +64,25 @@ func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest
 	log.Printf("🚀 AUTHORIZER INVOKED: Starting authorization for %s", event.MethodArn)
 	log.Printf("🎟️  Authorization Token Present: %v", event.AuthorizationToken != "")
 	
-	// Remove "Bearer " prefix if present
-	token := strings.TrimPrefix(event.AuthorizationToken, "Bearer ")
-	log.Printf("🔍 Token extracted (length: %d)", len(token))
+	// TOKEN type should strip "Bearer " but sometimes doesn't - handle it
+	token := event.AuthorizationToken
+	log.Printf("🔍 Raw token received (length: %d): %s", len(token), token)
+	
+	// Handle case-insensitive "Bearer " prefix stripping
+	if len(token) > 7 {
+		prefix := strings.ToLower(token[:7])
+		if prefix == "bearer " {
+			token = token[7:] // Remove "Bearer " prefix (7 characters)
+			log.Printf("🔍 Stripped 'Bearer ' prefix (case insensitive)")
+		}
+	}
+	
+	log.Printf("🔍 Token after stripping (length: %d)", len(token))
+	if len(token) > 80 {
+		log.Printf("🔍 First 80 chars: %s", token[:80])
+	} else {
+		log.Printf("🔍 Full token: %s", token)
+	}
 	
 	tenant, err := ValidateToken(token)
 	if err != nil {

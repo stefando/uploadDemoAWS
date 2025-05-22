@@ -112,8 +112,6 @@ Resources:
     Properties:
       BucketName:
         Fn::Sub: ${AWS::StackName}-store-tenant-a
-      VersioningConfiguration:
-        Status: Enabled
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -131,8 +129,6 @@ Resources:
     Properties:
       BucketName:
         Fn::Sub: ${AWS::StackName}-store-tenant-b
-      VersioningConfiguration:
-        Status: Enabled
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -226,7 +222,7 @@ Resources:
     Properties:
       FunctionName:
         Fn::Sub: ${AWS::StackName}-tenant-authorizer
-      CodeUri: s3://aws-sam-cli-managed-default-samclisourcebucket-gjzdgbfvwjgj/7c4b91f3c88c63963bd1b1e270053201
+      CodeUri: s3://aws-sam-cli-managed-default-samclisourcebucket-gjzdgbfvwjgj/918093c72b04c5f62b3f04e13fd238f7
       Handler: bootstrap
       Runtime: provided.al2023
       Environment:
@@ -286,14 +282,14 @@ Resources:
       Auth:
         Authorizers:
           TenantVerificationAuthorizer:
-            FunctionPayloadType: REQUEST
+            FunctionPayloadType: TOKEN
             FunctionArn:
               Fn::GetAtt:
               - TenantAuthorizerFunction
               - Arn
+            AuthorizerResultTtlInSeconds: 0
             Identity:
-              Headers:
-              - Authorization
+              Header: Authorization
       Cors:
         AllowMethods: '''GET,POST,OPTIONS'''
         AllowHeaders: '''Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'''

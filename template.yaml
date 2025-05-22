@@ -298,11 +298,11 @@ Resources:
         Authorizers:
           # Lambda authorizer for Cognito JWT validation + tenant verification
           TenantVerificationAuthorizer:
-            FunctionPayloadType: REQUEST
+            FunctionPayloadType: TOKEN
             FunctionArn: !GetAtt TenantAuthorizerFunction.Arn
+            AuthorizerResultTtlInSeconds: 0
             Identity:
-              Headers:
-                - Authorization
+              Header: Authorization
       # CORS configuration for web clients
       Cors:
         AllowMethods: "'GET,POST,OPTIONS'"
