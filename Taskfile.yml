@@ -5,6 +5,8 @@ version: '3'
 
 vars:
   AWS_PROFILE: personal
+  AWS_REGION: eu-central-1
+  STACK_NAME: upload-demo-stack
   MAIN_BINARY: bootstrap
   PRETOKEN_BINARY: lambda/pre-token/bootstrap
   BUILD_DIR: .aws-sam/build
@@ -33,14 +35,14 @@ tasks:
       # First build Go binaries with our script
       - task: build
       # Use SAM package command to create deployment package
-      - sam package --s3-bucket aws-sam-cli-managed-default-samclisourcebucket-gjzdgbfvwjgj --output-template-file packaged.yaml --profile {{.AWS_PROFILE}} --region eu-central-1
+      - sam package --s3-bucket aws-sam-cli-managed-default-samclisourcebucket-gjzdgbfvwjgj --output-template-file packaged.yaml --profile {{.AWS_PROFILE}} --region {{.AWS_REGION}}
 
   # Deploy the complete stack
   deploy:
     desc: Deploy the CloudFormation stack using SAM
     cmds:
       - task: sam-package
-      - sam deploy --template-file packaged.yaml --profile {{.AWS_PROFILE}} --capabilities CAPABILITY_NAMED_IAM --region eu-central-1 --no-fail-on-empty-changeset
+      - sam deploy --template-file packaged.yaml --stack-name {{.STACK_NAME}} --profile {{.AWS_PROFILE}} --capabilities CAPABILITY_NAMED_IAM --region {{.AWS_REGION}} --no-fail-on-empty-changeset
 
   # Start local API for testing
   local:
@@ -75,7 +77,7 @@ tasks:
   delete:
     desc: Delete the CloudFormation stack
     cmds:
-      - sam delete --profile {{.AWS_PROFILE}}
+      - sam delete --stack-name {{.STACK_NAME}} --profile {{.AWS_PROFILE}} --region {{.AWS_REGION}} --no-prompts
 
   # Get Cognito user pool information for testing
   info:

@@ -12,7 +12,6 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/stefando/uploadDemoAWS/internal/auth"
@@ -21,7 +20,6 @@ import (
 
 // Global variables to hold initialized services
 var (
-	s3Client      *s3.Client
 	uploadService *upload.UploadService
 )
 
@@ -33,17 +31,14 @@ func init() {
 		log.Fatalf("Failed to load AWS config: %v", err)
 	}
 
-	// Initialize S3 client
-	s3Client = s3.NewFromConfig(cfg)
-
 	// Get the shared bucket name from environment variable
 	sharedBucket := os.Getenv("SHARED_BUCKET")
 	if sharedBucket == "" {
 		log.Fatal("SHARED_BUCKET environment variable not set")
 	}
 
-	// Initialize upload service with the shared bucket
-	uploadService = upload.NewUploadService(s3Client, sharedBucket)
+	// Initialize upload service with AWS config and bucket name
+	uploadService = upload.NewUploadService(cfg, sharedBucket)
 
 	log.Printf("Services initialized with shared bucket: %s", sharedBucket)
 }

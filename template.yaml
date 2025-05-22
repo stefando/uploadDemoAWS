@@ -142,6 +142,44 @@ Resources:
           Value: MultiTenantFileStorage
 
   # ================================================
+  # TENANT ACCESS ROLE - For S3 operations with session tags
+  # ================================================
+  # This role is assumed by Lambda with tenant-specific session tags
+  TenantAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-tenant-access-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              # Using explicit ARN with role name to avoid circular dependency
+              # (can't use !GetAtt LambdaExecutionRole.Arn here)
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-lambda-execution-role"
+            Action: 
+              - sts:AssumeRole
+              - sts:TagSession
+      Policies:
+        - PolicyName: TenantS3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Allow S3 operations only on paths matching the session tag
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource: !Sub "${SharedStorageBucket.Arn}/${!aws:PrincipalTag/tenant_id}/*"
+              # Allow listing bucket contents for tenant prefix only
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt SharedStorageBucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix: "${aws:PrincipalTag/tenant_id}/*"
+
+  # ================================================
   # IAM ROLE FOR MAIN LAMBDA FUNCTION
   # ================================================
   # This role provides a single execution context with permissions
@@ -149,6 +187,7 @@ Resources:
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
+      # Explicit name is required to break circular dependency with TenantAccessRole
       RoleName: !Sub "${AWS::StackName}-lambda-execution-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -161,20 +200,16 @@ Resources:
         # Basic Lambda execution permissions (CloudWatch Logs)
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        # Custom policy for S3 access to tenant buckets
-        - PolicyName: TenantBasedS3Access
+        # Allow Lambda to assume the tenant access role
+        - PolicyName: AssumeRolePolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              # Allow S3 operations on all tenant buckets with our prefix
               - Effect: Allow
-                Action:
-                  - s3:PutObject
-                  - s3:GetObject
-                  - s3:ListBucket
-                Resource:
-                  - !GetAtt SharedStorageBucket.Arn
-                  - !Sub "${SharedStorageBucket.Arn}/*"
+                Action: 
+                  - sts:AssumeRole
+                  - sts:TagSession
+                Resource: !GetAtt TenantAccessRole.Arn
 
   # ================================================
   # MAIN LAMBDA FUNCTION - File Upload API
@@ -193,6 +228,7 @@ Resources:
           USER_POOL_ID: !Ref UserPool
           USER_POOL_CLIENT_ID: !Ref UserPoolClient
           LOG_LEVEL: INFO
+          TENANT_ACCESS_ROLE_ARN: !GetAtt TenantAccessRole.Arn
       Events:
         # API Gateway integration for upload endpoint (requires authentication)
         Upload:
@@ -296,10 +332,8 @@ Resources:
         EndpointConfiguration: REGIONAL
         Route53:
           HostedZoneId: !Ref HostedZoneId
-        # Explicit base path mapping: root path (/) maps to prod stage
-        BasePath: 
-          - Path: /
-            Stage: prod
+        # BasePath defaults to "/" which maps to the StageName ("prod")
+        # This means: https://upload-api.stefando.me/upload → https://{api-id}.execute-api.{region}.amazonaws.com/prod/upload
 
   # ================================================
   # SSL CERTIFICATE - HTTPS Security
