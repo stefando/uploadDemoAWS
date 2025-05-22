@@ -59,9 +59,11 @@ Resources:
           AttributeDataType: String
           Required: false
           Mutable: true
-      # Lambda triggers for adding custom claims to JWT
+      # Lambda triggers for adding custom claims to JWT (V2_0 enables access token customization)
       LambdaConfig:
-        PreTokenGeneration: !GetAtt PreTokenGenerationLambda.Arn
+        PreTokenGenerationConfig:
+          LambdaArn: !GetAtt PreTokenGenerationLambda.Arn
+          LambdaVersion: "V2_0"
 
   # User Pool Client - handles JWT token generation
   # This is what your frontend application uses to authenticate users
@@ -111,6 +113,15 @@ Resources:
       Principal: cognito-idp.amazonaws.com
       SourceArn: !GetAtt UserPool.Arn
 
+  # Permission for API Gateway to invoke the tenant authorizer Lambda
+  TenantAuthorizerLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TenantAuthorizerFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/authorizers/*"
+
   # ================================================
   # S3 BUCKETS - File Storage
   # ================================================
@@ -119,9 +130,6 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub "${AWS::StackName}-store-tenant-a"
-      # Enable versioning for data protection
-      VersioningConfiguration:
-        Status: Enabled
       # Block public access for security
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
@@ -139,8 +147,6 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub "${AWS::StackName}-store-tenant-b"
-      VersioningConfiguration:
-        Status: Enabled
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -215,9 +221,8 @@ Resources:
             RestApiId: !Ref ApiGateway
             Path: /upload
             Method: POST
-            # Chain authorizers - first Cognito validates JWT, then Lambda verifies tenant_id claim
             Auth:
-              Authorizer: CognitoJWTAuthorizer
+              Authorizer: TenantVerificationAuthorizer
               
         # Health check endpoint (no authentication required)
         Health:
@@ -241,6 +246,9 @@ Resources:
       Environment:
         Variables:
           LOG_LEVEL: INFO
+          COGNITO_POOL_ID: !Ref UserPool
+          COGNITO_CLIENT_ID: !Ref UserPoolClient
+          COGNITO_REGION: !Ref AWS::Region
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -249,31 +257,57 @@ Resources:
               Resource: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/*/*'
 
   # ================================================
+  # API GATEWAY CLOUDWATCH LOGS ROLE
+  # ================================================
+  ApiGatewayCloudWatchLogsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+
+  ApiGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchLogsRole.Arn
+
+  # ================================================
   # API GATEWAY - HTTP API Endpoint
   # ================================================
   ApiGateway:
     Type: AWS::Serverless::Api
+    DependsOn: ApiGatewayAccount
     Properties:
       Name: !Sub "${AWS::StackName}-api"
       StageName: prod
-      # Authorization configuration
+      # Enable API Gateway execution logging
+      MethodSettings:
+        - HttpMethod: "*"
+          ResourcePath: "/*"
+          LoggingLevel: INFO
+          DataTraceEnabled: true
+          MetricsEnabled: true
+      # Authorization configuration  
       Auth:
-        DefaultAuthorizer: CognitoJWTAuthorizer
         Authorizers:
-          # First layer: Cognito validates JWT signatures, expiry, etc.
-          CognitoJWTAuthorizer:
-            UserPoolArn: !GetAtt UserPool.Arn
-            AuthType: COGNITO_USER_POOLS
-            Identity:
-              Header: Authorization
-              ValidationExpression: "Bearer .*"
-          # Second layer: Lambda validates tenant_id claim presence
+          # Lambda authorizer for Cognito JWT validation + tenant verification
           TenantVerificationAuthorizer:
             FunctionPayloadType: REQUEST
             FunctionArn: !GetAtt TenantAuthorizerFunction.Arn
             Identity:
               Headers:
                 - Authorization
+      # CORS configuration for web clients
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
       # Custom domain configuration
       Domain:
         DomainName: !Sub "${ApiSubdomain}.${DomainName}"

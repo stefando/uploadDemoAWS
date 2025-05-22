@@ -133,6 +133,18 @@ func lambdaHandler(ctx context.Context, req events.APIGatewayProxyRequest) (even
 		}, nil
 	}
 
+	// Extract tenant ID from API Gateway Cognito authorizer claims
+	if req.RequestContext.Authorizer != nil {
+		if claims, ok := req.RequestContext.Authorizer["claims"].(map[string]interface{}); ok {
+			if tenantID, exists := claims["tenant_id"].(string); exists && tenantID != "" {
+				// Add tenant ID directly to request context (bypass JWT parsing)
+				ctx = auth.WithTenantID(httpReq.Context(), tenantID)
+				httpReq = httpReq.WithContext(ctx)
+				log.Printf("Tenant ID from API Gateway claims: %s", tenantID)
+			}
+		}
+	}
+
 	// Create a response recorder to capture Chi's response
 	respRecorder := newResponseRecorder()
 

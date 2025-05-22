@@ -48,8 +48,6 @@ func (s *UploadService) UploadFile(ctx context.Context, tenantID string, content
 		Body:   strings.NewReader(string(content)),
 		// Add content type for JSON
 		ContentType: aws.String("application/json"),
-		// Add tenant tag to the object for additional security
-		Tagging: aws.String(fmt.Sprintf("TenantId=%s", tenantID)),
 	}
 	
 	// Upload the file to S3

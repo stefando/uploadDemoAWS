@@ -45,10 +45,12 @@ Resources:
         Required: false
         Mutable: true
       LambdaConfig:
-        PreTokenGeneration:
-          Fn::GetAtt:
-          - PreTokenGenerationLambda
-          - Arn
+        PreTokenGenerationConfig:
+          LambdaArn:
+            Fn::GetAtt:
+            - PreTokenGenerationLambda
+            - Arn
+          LambdaVersion: V2_0
     Metadata:
       SamResourceId: UserPool
   UserPoolClient:
@@ -73,7 +75,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: upload-demo-pre-token-generation
-      CodeUri: s3://aws-sam-cli-managed-default-samclisourcebucket-gjzdgbfvwjgj/f20f633a97148d23cb4763f1b6e45a8d
+      CodeUri: s3://aws-sam-cli-managed-default-samclisourcebucket-gjzdgbfvwjgj/058704d9cfb096dd3da211f48e7d6608
       Handler: bootstrap
       Runtime: provided.al2023
       Environment:
@@ -94,6 +96,17 @@ Resources:
         - Arn
     Metadata:
       SamResourceId: PreTokenGenerationLambdaPermission
+  TenantAuthorizerLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Ref: TenantAuthorizerFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn:
+        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/authorizers/*
+    Metadata:
+      SamResourceId: TenantAuthorizerLambdaPermission
   TenantABucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -172,7 +185,7 @@ Resources:
     Properties:
       FunctionName:
         Fn::Sub: ${AWS::StackName}-upload-function
-      CodeUri: s3://aws-sam-cli-managed-default-samclisourcebucket-gjzdgbfvwjgj/d8c939bbfbbf831199f465f2f477ea3b
+      CodeUri: s3://aws-sam-cli-managed-default-samclisourcebucket-gjzdgbfvwjgj/b1386e0e6df4b0fd909b639a368ad6b7
       Handler: bootstrap
       Role:
         Fn::GetAtt:
@@ -198,7 +211,7 @@ Resources:
             Path: /upload
             Method: POST
             Auth:
-              Authorizer: CognitoJWTAuthorizer
+              Authorizer: TenantVerificationAuthorizer
         Health:
           Type: Api
           Properties:
@@ -213,12 +226,18 @@ Resources:
     Properties:
       FunctionName:
         Fn::Sub: ${AWS::StackName}-tenant-authorizer
-      CodeUri: s3://aws-sam-cli-managed-default-samclisourcebucket-gjzdgbfvwjgj/830adc66e1697cfa3e6ed132e8230fac
+      CodeUri: s3://aws-sam-cli-managed-default-samclisourcebucket-gjzdgbfvwjgj/7c4b91f3c88c63963bd1b1e270053201
       Handler: bootstrap
       Runtime: provided.al2023
       Environment:
         Variables:
           LOG_LEVEL: INFO
+          COGNITO_POOL_ID:
+            Ref: UserPool
+          COGNITO_CLIENT_ID:
+            Ref: UserPoolClient
+          COGNITO_REGION:
+            Ref: AWS::Region
       Policies:
       - Version: '2012-10-17'
         Statement:
@@ -228,24 +247,44 @@ Resources:
             Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/*/*
     Metadata:
       SamResourceId: TenantAuthorizerFunction
+  ApiGatewayCloudWatchLogsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: apigateway.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+    Metadata:
+      SamResourceId: ApiGatewayCloudWatchLogsRole
+  ApiGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Properties:
+      CloudWatchRoleArn:
+        Fn::GetAtt:
+        - ApiGatewayCloudWatchLogsRole
+        - Arn
+    Metadata:
+      SamResourceId: ApiGatewayAccount
   ApiGateway:
     Type: AWS::Serverless::Api
+    DependsOn: ApiGatewayAccount
     Properties:
       Name:
         Fn::Sub: ${AWS::StackName}-api
       StageName: prod
+      MethodSettings:
+      - HttpMethod: '*'
+        ResourcePath: /*
+        LoggingLevel: INFO
+        DataTraceEnabled: true
+        MetricsEnabled: true
       Auth:
-        DefaultAuthorizer: CognitoJWTAuthorizer
         Authorizers:
-          CognitoJWTAuthorizer:
-            UserPoolArn:
-              Fn::GetAtt:
-              - UserPool
-              - Arn
-            AuthType: COGNITO_USER_POOLS
-            Identity:
-              Header: Authorization
-              ValidationExpression: Bearer .*
           TenantVerificationAuthorizer:
             FunctionPayloadType: REQUEST
             FunctionArn:
@@ -255,6 +294,10 @@ Resources:
             Identity:
               Headers:
               - Authorization
+      Cors:
+        AllowMethods: '''GET,POST,OPTIONS'''
+        AllowHeaders: '''Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'''
+        AllowOrigin: '''*'''
       Domain:
         DomainName:
           Fn::Sub: ${ApiSubdomain}.${DomainName}
