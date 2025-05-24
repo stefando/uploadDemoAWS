@@ -29,14 +29,10 @@ func init() {
 	if stackName == "" {
 		log.Fatal("STACK_NAME environment variable not set")
 	}
-	region := os.Getenv("AWS_REGION")
-	if region == "" {
-		log.Fatal("AWS_REGION environment variable not set")
-	}
 
 	// Initialize login service
-	loginService = auth.NewLoginService(cfg, stackName, region)
-	log.Printf("Login service initialized for stack: %s in region: %s", stackName, region)
+	loginService = auth.NewLoginService(cfg, stackName)
+	log.Printf("Login service initialized for stack: %s", stackName)
 }
 
 // handleLogin processes the Lambda event directly without Chi router

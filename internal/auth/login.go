@@ -13,7 +13,6 @@ import (
 type LoginService struct {
 	cognitoClient *cognitoidentityprovider.Client
 	stackName     string
-	region        string
 }
 
 // LoginRequest represents the login request payload
@@ -33,11 +32,10 @@ type LoginResponse struct {
 }
 
 // NewLoginService creates a new login service instance
-func NewLoginService(cfg aws.Config, stackName, region string) *LoginService {
+func NewLoginService(cfg aws.Config, stackName string) *LoginService {
 	return &LoginService{
 		cognitoClient: cognitoidentityprovider.NewFromConfig(cfg),
 		stackName:     stackName,
-		region:        region,
 	}
 }
 

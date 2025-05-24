@@ -398,7 +398,6 @@ Resources:
       Environment:
         Variables:
           LOG_LEVEL: INFO
-          AWS_REGION: !Ref AWS::Region
           STACK_NAME: !Ref AWS::StackName
       Policies:
         - Version: '2012-10-17'
