@@ -3,7 +3,7 @@ set -e
 
 # Build main Lambda
 echo "Building main Lambda function..."
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags lambda.norpc -ldflags="-s -w" -o bootstrap ./cmd/lambda
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags lambda.norpc -ldflags="-s -w" -o bootstrap ./cmd/lambda
 
 # Create zip file for main Lambda
 echo "Creating zip for main Lambda..."
@@ -13,7 +13,7 @@ cp bootstrap .aws-sam/build/UploadFunction/
 
 # Build pre-token Lambda
 echo "Building pre-token Lambda function..."
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags lambda.norpc -ldflags="-s -w" -o lambda/pre-token/bootstrap ./lambda/pre-token
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags lambda.norpc -ldflags="-s -w" -o lambda/pre-token/bootstrap ./lambda/pre-token
 
 # Create zip file for pre-token Lambda
 echo "Creating zip for pre-token Lambda..."
@@ -23,7 +23,7 @@ cp lambda/pre-token/bootstrap .aws-sam/build/PreTokenGenerationLambda/
 
 # Build authorizer Lambda
 echo "Building authorizer Lambda function..."
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags lambda.norpc -ldflags="-s -w" -o lambda/authorizer/bootstrap ./lambda/authorizer
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags lambda.norpc -ldflags="-s -w" -o lambda/authorizer/bootstrap ./lambda/authorizer
 
 # Create zip file for authorizer Lambda
 echo "Creating zip for authorizer Lambda..."

@@ -14,7 +14,7 @@ vars:
 tasks:
   # Build all Lambda function binaries for Linux
   build:
-    desc: Build all Go Lambda functions for Linux AMD64
+    desc: Build all Go Lambda functions for Linux ARM64
     cmds:
       - ./build.sh
     sources:

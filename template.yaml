@@ -10,7 +10,7 @@ Globals:
     # Using the provided.al2023 Lambda runtime for execution
     Runtime: provided.al2023
     Architectures:
-      - x86_64
+      - arm64
 
 Parameters:
   DomainName:
@@ -178,6 +178,38 @@ Resources:
                 Condition:
                   StringLike:
                     s3:prefix: "${aws:PrincipalTag/tenant_id}/*"
+
+  # Statement 1: PutObject/GetObject
+  #
+  #  Resource: !Sub "${SharedStorageBucket.Arn}/${!aws:PrincipalTag/tenant_id}/*"
+  #  - Actions: s3:PutObject, s3:GetObject
+  #  - Resource-level permission: These actions operate on individual objects
+  #  - No condition needed: The resource ARN itself contains the restriction
+  #  - Example: If tenant_id=tenant-a, this becomes arn:aws:s3:::bucket/tenant-a/*
+  #  - Result: Can only read/write objects under your tenant's prefix
+  #
+  #  Statement 2: ListBucket
+  #
+  #  Resource: !GetAtt SharedStorageBucket.Arn
+  #  Condition:
+  #    StringLike:
+  #      s3:prefix: "${aws:PrincipalTag/tenant_id}/*"
+  #  - Action: s3:ListBucket
+  #  - Bucket-level permission: This action operates on the entire bucket
+  #  - Condition required: Since the resource is the whole bucket, we use a condition
+  #  - Purpose: When listing, only show files under your tenant's prefix
+  #  - Without condition: Would see ALL files in the bucket!
+  #
+  #  Why Two Approaches?
+  #
+  #  1. Object operations (Put/Get) can use the resource ARN to restrict access
+  #  2. Bucket operations (List) must use conditions because they operate on the bucket itself
+  #
+  #  Think of it like a building:
+  #  - PutObject/GetObject = "You can only enter room 5A" (specific resource)
+  #  - ListBucket = "You can look at the directory, but only see rooms starting with 5" (condition on broader resource)
+  #
+  #  This ensures tenants can only see and access their own data, even when performing different types of S3 operations.
 
   # ================================================
   # IAM ROLE FOR MAIN LAMBDA FUNCTION
