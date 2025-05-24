@@ -272,6 +272,43 @@ Resources:
             Auth:
               Authorizer: TenantVerificationAuthorizer
               
+        # Multipart upload endpoints (require authentication)
+        UploadInitiate:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /upload/initiate
+            Method: POST
+            Auth:
+              Authorizer: TenantVerificationAuthorizer
+              
+        UploadComplete:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /upload/complete
+            Method: POST
+            Auth:
+              Authorizer: TenantVerificationAuthorizer
+              
+        UploadAbort:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /upload/abort
+            Method: POST
+            Auth:
+              Authorizer: TenantVerificationAuthorizer
+              
+        UploadRefresh:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /upload/refresh
+            Method: POST
+            Auth:
+              Authorizer: TenantVerificationAuthorizer
+              
         # Health check endpoint (no authentication required)
         Health:
           Type: Api
@@ -279,6 +316,40 @@ Resources:
             RestApiId: !Ref ApiGateway
             Path: /health
             Method: GET
+
+  # ================================================
+  # LOGIN LAMBDA FUNCTION - Authentication Service
+  # ================================================
+  LoginFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-login"
+      CodeUri: .aws-sam/build/LoginFunction/function.zip
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref UserPool
+          USER_POOL_CLIENT_ID: !Ref UserPoolClient
+          LOG_LEVEL: INFO
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - cognito-idp:InitiateAuth
+                - cognito-idp:RespondToAuthChallenge
+              Resource: !GetAtt UserPool.Arn
+      Events:
+        # Login endpoint (no authentication required)
+        Login:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /login
+            Method: POST
 
   # ================================================
   # TENANT AUTHORIZER LAMBDA - Custom JWT Claims Validation

@@ -13,12 +13,19 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
 ## Requirements Summary
 
 ### Core Architecture
-- **AWS Lambda Function:** Multiple endpoints for file operations:
-  - `/upload` - Direct JSON upload
-  - `/upload/initiate` - Start multipart upload
-  - `/upload/complete` - Complete multipart upload
-  - `/upload/abort` - Cancel multipart upload
-  - `/upload/refresh` - Refresh presigned URLs
+- **AWS Lambda Functions:** Separate functions for different concerns:
+  - **Upload Lambda** (`cmd/lambda`): Handles all file operations (`/upload/*` endpoints)
+  - **Login Lambda** (`cmd/login`): Handles authentication (`/login` endpoint)
+  - **Authorizer Lambda** (`lambda/authorizer`): Validates JWT tokens for protected endpoints
+  - **Pre-token Lambda** (`lambda/pre-token`): Adds tenant claims to Cognito tokens
+- **API Endpoints:**
+  - `/login` - Authenticate and receive JWT tokens (no auth required)
+  - `/upload` - Direct JSON upload (requires auth)
+  - `/upload/initiate` - Start multipart upload (requires auth)
+  - `/upload/complete` - Complete multipart upload (requires auth)
+  - `/upload/abort` - Cancel multipart upload (requires auth)
+  - `/upload/refresh` - Refresh presigned URLs (requires auth)
+  - `/health` - Health check (no auth required)
 - **Multi-tenancy:** Two tenants (`tenant-a`, `tenant-b`) with shared S3 bucket using tenant-prefixed paths
 - **Authentication:** AWS Cognito User Pool producing JWT tokens with tenant claims
 - **Storage:** Single shared S3 bucket (`store-shared`) with tenant-prefixed paths
@@ -181,6 +188,34 @@ After deployment, you need to create and configure Cognito users for testing:
 Both the custom domain (upload-api.stefando.me) and direct API Gateway endpoint can be used for testing.
 
 #### Step 1: Get Access Tokens
+
+**Preferred Method - Using Login API:**
+
+1. Login as tenant-a:
+   ```bash
+   # Using custom domain
+   curl -X POST https://upload-api.stefando.me/login \
+     -H "Content-Type: application/json" \
+     -d '{"username": "user-tenant-a", "password": "TestPass123!"}' \
+     | jq -r '.access_token'
+   
+   # Or using direct API endpoint
+   curl -X POST https://${API_ID}.execute-api.eu-central-1.amazonaws.com/prod/login \
+     -H "Content-Type: application/json" \
+     -d '{"username": "user-tenant-a", "password": "TestPass123!"}' \
+     | jq -r '.access_token'
+   ```
+
+2. Login as tenant-b:
+   ```bash
+   # Using custom domain
+   curl -X POST https://upload-api.stefando.me/login \
+     -H "Content-Type: application/json" \
+     -d '{"username": "user-tenant-b", "password": "TestPass123!"}' \
+     | jq -r '.access_token'
+   ```
+
+**Alternative Method - Using AWS CLI (backup):**
 
 1. Get access token for tenant-a:
    ```bash

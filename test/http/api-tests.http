@@ -1,0 +1,157 @@
+### JetBrains HTTP Client test file for Upload Demo API
+### Usage: Open this file in JetBrains IDE and click the green arrow to run requests
+
+### Variables (update these after deployment)
+@baseUrl = https://upload-api.stefando.me
+# Alternative: Use direct API Gateway URL
+# @baseUrl = https://YOUR_API_ID.execute-api.eu-central-1.amazonaws.com/prod
+
+### Login as tenant-a user
+# @name loginTenantA
+POST {{baseUrl}}/login
+Content-Type: application/json
+
+{
+  "username": "user-tenant-a",
+  "password": "TestPass123!"
+}
+
+> {%
+    client.test("Login successful", function() {
+        client.assert(response.status === 200, "Response status is not 200");
+        client.assert(response.body.access_token, "No access token in response");
+    });
+    client.global.set("accessTokenA", response.body.access_token);
+    client.global.set("idTokenA", response.body.id_token);
+%}
+
+###
+
+### Login as tenant-b user
+# @name loginTenantB
+POST {{baseUrl}}/login
+Content-Type: application/json
+
+{
+  "username": "user-tenant-b",
+  "password": "TestPass123!"
+}
+
+> {%
+    client.test("Login successful", function() {
+        client.assert(response.status === 200, "Response status is not 200");
+        client.assert(response.body.access_token, "No access token in response");
+    });
+    client.global.set("accessTokenB", response.body.access_token);
+    client.global.set("idTokenB", response.body.id_token);
+%}
+
+###
+
+### Upload file as tenant-a
+POST {{baseUrl}}/upload
+Authorization: Bearer {{accessTokenA}}
+Content-Type: application/json
+
+{
+  "data": "Test data from tenant A",
+  "timestamp": "{{$timestamp}}"
+}
+
+###
+
+### Upload file as tenant-b
+POST {{baseUrl}}/upload
+Authorization: Bearer {{accessTokenB}}
+Content-Type: application/json
+
+{
+  "data": "Test data from tenant B",
+  "timestamp": "{{$timestamp}}"
+}
+
+###
+
+### Initiate multipart upload as tenant-a
+POST {{baseUrl}}/upload/initiate
+Authorization: Bearer {{accessTokenA}}
+Content-Type: application/json
+
+{
+  "containerKey": "large-files",
+  "objectKey": "big-data-{{$timestamp}}.json",
+  "fileSize": 104857600,
+  "partSize": 5242880
+}
+
+> {%
+    client.test("Initiate upload successful", function() {
+        client.assert(response.status === 200, "Response status is not 200");
+        client.assert(response.body.uploadId, "No uploadId in response");
+        client.assert(response.body.presignedUrls, "No presignedUrls in response");
+    });
+    client.global.set("uploadId", response.body.uploadId);
+    client.global.set("objectKey", response.body.objectKey);
+%}
+
+###
+
+### Complete multipart upload
+POST {{baseUrl}}/upload/complete
+Authorization: Bearer {{accessTokenA}}
+Content-Type: application/json
+
+{
+  "uploadId": "{{uploadId}}",
+  "objectKey": "{{objectKey}}",
+  "parts": [
+    {
+      "partNumber": 1,
+      "etag": "example-etag-1"
+    },
+    {
+      "partNumber": 2,
+      "etag": "example-etag-2"
+    }
+  ]
+}
+
+###
+
+### Abort multipart upload
+POST {{baseUrl}}/upload/abort
+Authorization: Bearer {{accessTokenA}}
+Content-Type: application/json
+
+{
+  "uploadId": "{{uploadId}}",
+  "objectKey": "{{objectKey}}"
+}
+
+###
+
+### Refresh presigned URLs
+POST {{baseUrl}}/upload/refresh
+Authorization: Bearer {{accessTokenA}}
+Content-Type: application/json
+
+{
+  "uploadId": "{{uploadId}}",
+  "objectKey": "{{objectKey}}",
+  "partNumbers": [1, 2, 3]
+}
+
+###
+
+### Health check (no auth required)
+GET {{baseUrl}}/health
+
+###
+
+### Test unauthorized access (should fail)
+POST {{baseUrl}}/upload
+Content-Type: application/json
+
+{
+  "test": "Should fail without auth"
+}

@@ -19,7 +19,7 @@ var TenantMapping = map[string]string{
 // Using official AWS SDK event type for Cognito Pre Token Generation V2_0
 func HandleRequest(ctx context.Context, event events.CognitoEventUserPoolsPreTokenGenV2_0) (events.CognitoEventUserPoolsPreTokenGenV2_0, error) {
 	log.Printf("Received event for user: %s", event.UserName)
-	
+
 	// Look up tenant ID based on username
 	tenantID, ok := TenantMapping[event.UserName]
 	if !ok {
@@ -38,7 +38,7 @@ func HandleRequest(ctx context.Context, event events.CognitoEventUserPoolsPreTok
 		event.Response.ClaimsAndScopeOverrideDetails.AccessTokenGeneration.ClaimsToAddOrOverride = make(map[string]interface{})
 	}
 	event.Response.ClaimsAndScopeOverrideDetails.AccessTokenGeneration.ClaimsToAddOrOverride["tenant_id"] = tenantID
-	
+
 	log.Printf("Added tenant_id claim %s to both ID and access tokens for user %s", tenantID, event.UserName)
 	return event, nil
 }

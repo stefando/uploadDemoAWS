@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
-	"strings"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/coreos/go-oidc/v3/oidc"
+	"log"
 	"os"
+	"strings"
 )
 
 var (
@@ -64,16 +64,16 @@ func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest
 	log.Printf("🚀 REQUEST AUTHORIZER INVOKED: Starting authorization for %s", event.MethodArn)
 	log.Printf("📋 REQUEST INFO: %s %s", event.HTTPMethod, event.Path)
 	log.Printf("🌐 Stage: %s, RequestID: %s", event.RequestContext.Stage, event.RequestContext.RequestID)
-	
+
 	// Log all available headers for debugging
 	log.Printf("📋 All Headers: %+v", event.Headers)
-	
+
 	// Extract Authorization header from REQUEST event
 	authHeader, exists := event.Headers["Authorization"]
 	if !exists {
 		authHeader, exists = event.Headers["authorization"] // Try lowercase
 	}
-	
+
 	log.Printf("🎟️  Authorization Header Present: %v (looking for: Authorization or authorization)", exists)
 	if !exists {
 		log.Printf("❌ AUTHORIZATION FAILED: No Authorization header found")
@@ -82,10 +82,10 @@ func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest
 			PolicyDocument: generatePolicy("Deny", event.MethodArn),
 		}, nil
 	}
-	
+
 	token := authHeader
 	log.Printf("🔍 Raw token received (length: %d): %s", len(token), token)
-	
+
 	// Handle case-insensitive "Bearer " prefix stripping
 	if len(token) > 7 {
 		prefix := strings.ToLower(token[:7])
@@ -94,14 +94,14 @@ func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest
 			log.Printf("🔍 Stripped 'Bearer ' prefix (case insensitive)")
 		}
 	}
-	
+
 	log.Printf("🔍 Token after stripping (length: %d)", len(token))
 	if len(token) > 80 {
 		log.Printf("🔍 First 80 chars: %s", token[:80])
 	} else {
 		log.Printf("🔍 Full token: %s", token)
 	}
-	
+
 	tenant, err := ValidateToken(token)
 	if err != nil {
 		log.Printf("❌ AUTHORIZATION FAILED: %v", err)
@@ -110,7 +110,7 @@ func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest
 			PolicyDocument: generatePolicy("Deny", event.MethodArn),
 		}, nil
 	}
-	
+
 	log.Printf("✅ AUTHORIZATION SUCCESSFUL: tenant=%s", tenant)
 	return events.APIGatewayCustomAuthorizerResponse{
 		PrincipalID:    tenant,
