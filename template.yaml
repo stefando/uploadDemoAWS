@@ -30,14 +30,15 @@ Parameters:
 
 Resources:
   # ================================================
-  # COGNITO USER POOL - Authentication Service
+  # COGNITO USER POOLS - Multi-tenant Authentication
   # ================================================
-  # User Pool manages user accounts and authentication
-  # Think of it as your user database + authentication logic
-  UserPool:
+  # Separate user pools for each tenant following naming convention
+  
+  # User Pool for Tenant A
+  UserPoolTenantA:
     Type: AWS::Cognito::UserPool
     Properties:
-      UserPoolName: upload-demo-user-pool
+      UserPoolName: !Sub "${AWS::StackName}-tenant-a-user-pool"
       # Password policy for security
       Policies:
         PasswordPolicy:
@@ -55,23 +56,65 @@ Resources:
           AttributeDataType: String
           Required: true
           Mutable: true
-        - Name: tenant_id
+      # Lambda triggers for adding custom claims to JWT (V2_0 enables access token customization)
+      LambdaConfig:
+        PreTokenGenerationConfig:
+          LambdaArn: !GetAtt PreTokenGenerationLambdaTenantA.Arn
+          LambdaVersion: "V2_0"
+
+  # User Pool Client for Tenant A
+  UserPoolClientTenantA:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPoolTenantA
+      ClientName: !Sub "${AWS::StackName}-tenant-a-client"
+      # Explicit auth flows - these determine how clients can authenticate
+      ExplicitAuthFlows:
+        - ADMIN_NO_SRP_AUTH  # Allow admin-initiated auth (for testing)
+        - USER_PASSWORD_AUTH # Allow username/password auth
+      # Token validity periods
+      AccessTokenValidity: 1  # 1 hour
+      IdTokenValidity: 1      # 1 hour
+      RefreshTokenValidity: 30 # 30 days
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+        
+  # User Pool for Tenant B
+  UserPoolTenantB:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "${AWS::StackName}-tenant-b-user-pool"
+      # Password policy for security
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      # Auto-verify email addresses (for production, you'd want email verification)
+      AutoVerifiedAttributes:
+        - email
+      # Schema defines what user attributes we collect
+      Schema:
+        - Name: email
           AttributeDataType: String
-          Required: false
+          Required: true
           Mutable: true
       # Lambda triggers for adding custom claims to JWT (V2_0 enables access token customization)
       LambdaConfig:
         PreTokenGenerationConfig:
-          LambdaArn: !GetAtt PreTokenGenerationLambda.Arn
+          LambdaArn: !GetAtt PreTokenGenerationLambdaTenantB.Arn
           LambdaVersion: "V2_0"
 
-  # User Pool Client - handles JWT token generation
-  # This is what your frontend application uses to authenticate users
-  UserPoolClient:
+  # User Pool Client for Tenant B
+  UserPoolClientTenantB:
     Type: AWS::Cognito::UserPoolClient
     Properties:
-      UserPoolId: !Ref UserPool
-      ClientName: upload-demo-client
+      UserPoolId: !Ref UserPoolTenantB
+      ClientName: !Sub "${AWS::StackName}-tenant-b-client"
       # Explicit auth flows - these determine how clients can authenticate
       ExplicitAuthFlows:
         - ADMIN_NO_SRP_AUTH  # Allow admin-initiated auth (for testing)
@@ -88,30 +131,55 @@ Resources:
   # ================================================
   # LAMBDA FOR CUSTOM JWT CLAIMS
   # ================================================
-  # This Lambda adds the tenant_id claim to JWT tokens
-  # It's triggered before Cognito generates tokens
-  PreTokenGenerationLambda:
+  # Separate pre-token Lambdas for each tenant to add tenant_id claim
+  
+  # Pre-token Lambda for Tenant A
+  PreTokenGenerationLambdaTenantA:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: upload-demo-pre-token-generation
+      FunctionName: !Sub "${AWS::StackName}-pre-token-tenant-a"
       CodeUri: .aws-sam/build/PreTokenGenerationLambda/function.zip
       Handler: bootstrap
       Runtime: provided.al2023
       Environment:
         Variables:
-          # Environment variables for the Lambda
           LOG_LEVEL: INFO
+          TENANT_ID: tenant-a
       # Lambda is associated with Cognito via LambdaConfig, not through Events
       # SAM doesn't support Cognito triggers via the Events property
 
-  # Permission for Cognito to invoke the pre-token Lambda
-  PreTokenGenerationLambdaPermission:
+  # Permission for Cognito to invoke the pre-token Lambda for Tenant A
+  PreTokenGenerationLambdaPermissionTenantA:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !Ref PreTokenGenerationLambda
+      FunctionName: !Ref PreTokenGenerationLambdaTenantA
       Action: lambda:InvokeFunction
       Principal: cognito-idp.amazonaws.com
-      SourceArn: !GetAtt UserPool.Arn
+      SourceArn: !GetAtt UserPoolTenantA.Arn
+      
+  # Pre-token Lambda for Tenant B
+  PreTokenGenerationLambdaTenantB:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-pre-token-tenant-b"
+      CodeUri: .aws-sam/build/PreTokenGenerationLambda/function.zip
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Environment:
+        Variables:
+          LOG_LEVEL: INFO
+          TENANT_ID: tenant-b
+      # Lambda is associated with Cognito via LambdaConfig, not through Events
+      # SAM doesn't support Cognito triggers via the Events property
+
+  # Permission for Cognito to invoke the pre-token Lambda for Tenant B
+  PreTokenGenerationLambdaPermissionTenantB:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref PreTokenGenerationLambdaTenantB
+      Action: lambda:InvokeFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPoolTenantB.Arn
 
   # Permission for API Gateway to invoke the tenant authorizer Lambda
   TenantAuthorizerLambdaPermission:
@@ -257,8 +325,6 @@ Resources:
         Variables:
           # Configuration passed to Lambda as environment variables
           SHARED_BUCKET: !Ref SharedStorageBucket
-          USER_POOL_ID: !Ref UserPool
-          USER_POOL_CLIENT_ID: !Ref UserPoolClient
           LOG_LEVEL: INFO
           TENANT_ACCESS_ROLE_ARN: !GetAtt TenantAccessRole.Arn
       Events:
@@ -331,9 +397,9 @@ Resources:
       MemorySize: 256
       Environment:
         Variables:
-          USER_POOL_ID: !Ref UserPool
-          USER_POOL_CLIENT_ID: !Ref UserPoolClient
           LOG_LEVEL: INFO
+          AWS_REGION: !Ref AWS::Region
+          STACK_NAME: !Ref AWS::StackName
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -341,7 +407,16 @@ Resources:
               Action:
                 - cognito-idp:InitiateAuth
                 - cognito-idp:RespondToAuthChallenge
-              Resource: !GetAtt UserPool.Arn
+              Resource: 
+                - !GetAtt UserPoolTenantA.Arn
+                - !GetAtt UserPoolTenantB.Arn
+            - Effect: Allow
+              Action:
+                - cognito-idp:ListUserPools
+                - cognito-idp:DescribeUserPool
+                - cognito-idp:ListUserPoolClients
+                - cognito-idp:DescribeUserPoolClient
+              Resource: "*"
       Events:
         # Login endpoint (no authentication required)
         Login:
@@ -365,9 +440,8 @@ Resources:
       Environment:
         Variables:
           LOG_LEVEL: INFO
-          COGNITO_POOL_ID: !Ref UserPool
-          COGNITO_CLIENT_ID: !Ref UserPoolClient
-          COGNITO_REGION: !Ref AWS::Region
+          # Space-separated list of valid issuers (user pool URLs)
+          VALID_ISSUERS: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPoolTenantA} https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPoolTenantB}"
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -462,17 +536,29 @@ Outputs:
     Export:
       Name: !Sub "${AWS::StackName}-api-url"
 
-  UserPoolId:
-    Description: Cognito User Pool ID
-    Value: !Ref UserPool
+  UserPoolIdTenantA:
+    Description: Cognito User Pool ID for Tenant A
+    Value: !Ref UserPoolTenantA
     Export:
-      Name: !Sub "${AWS::StackName}-user-pool-id"
+      Name: !Sub "${AWS::StackName}-user-pool-id-tenant-a"
 
-  UserPoolClientId:
-    Description: Cognito User Pool Client ID
-    Value: !Ref UserPoolClient
+  UserPoolClientIdTenantA:
+    Description: Cognito User Pool Client ID for Tenant A
+    Value: !Ref UserPoolClientTenantA
     Export:
-      Name: !Sub "${AWS::StackName}-user-pool-client-id"
+      Name: !Sub "${AWS::StackName}-user-pool-client-id-tenant-a"
+      
+  UserPoolIdTenantB:
+    Description: Cognito User Pool ID for Tenant B
+    Value: !Ref UserPoolTenantB
+    Export:
+      Name: !Sub "${AWS::StackName}-user-pool-id-tenant-b"
+
+  UserPoolClientIdTenantB:
+    Description: Cognito User Pool Client ID for Tenant B
+    Value: !Ref UserPoolClientTenantB
+    Export:
+      Name: !Sub "${AWS::StackName}-user-pool-client-id-tenant-b"
 
   SharedStorageBucket:
     Description: Shared S3 bucket for all tenants

@@ -11,13 +11,14 @@ import (
 
 // LoginService handles authentication with AWS Cognito
 type LoginService struct {
-	cognitoClient    *cognitoidentityprovider.Client
-	userPoolID       string
-	userPoolClientID string
+	cognitoClient *cognitoidentityprovider.Client
+	stackName     string
+	region        string
 }
 
 // LoginRequest represents the login request payload
 type LoginRequest struct {
+	Tenant   string `json:"tenant"`
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
@@ -32,19 +33,32 @@ type LoginResponse struct {
 }
 
 // NewLoginService creates a new login service instance
-func NewLoginService(cfg aws.Config, userPoolID, userPoolClientID string) *LoginService {
+func NewLoginService(cfg aws.Config, stackName, region string) *LoginService {
 	return &LoginService{
-		cognitoClient:    cognitoidentityprovider.NewFromConfig(cfg),
-		userPoolID:       userPoolID,
-		userPoolClientID: userPoolClientID,
+		cognitoClient: cognitoidentityprovider.NewFromConfig(cfg),
+		stackName:     stackName,
+		region:        region,
 	}
 }
 
 // Authenticate performs user authentication with Cognito
 func (s *LoginService) Authenticate(ctx context.Context, req *LoginRequest) (*LoginResponse, error) {
 	// Validate input
-	if req.Username == "" || req.Password == "" {
-		return nil, fmt.Errorf("username and password are required")
+	if req.Tenant == "" || req.Username == "" || req.Password == "" {
+		return nil, fmt.Errorf("tenant, username, and password are required")
+	}
+
+	// Discover user pool and client by naming convention
+	userPoolName := fmt.Sprintf("%s-%s-user-pool", s.stackName, req.Tenant)
+	userPoolID, err := s.findUserPoolByName(ctx, userPoolName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find user pool for tenant %s: %w", req.Tenant, err)
+	}
+
+	// Get the user pool client
+	clientID, err := s.findUserPoolClient(ctx, userPoolID, fmt.Sprintf("%s-%s-client", s.stackName, req.Tenant))
+	if err != nil {
+		return nil, fmt.Errorf("failed to find user pool client: %w", err)
 	}
 
 	// Prepare auth parameters
@@ -56,7 +70,7 @@ func (s *LoginService) Authenticate(ctx context.Context, req *LoginRequest) (*Lo
 	// Call Cognito InitiateAuth
 	input := &cognitoidentityprovider.InitiateAuthInput{
 		AuthFlow:       types.AuthFlowTypeUserPasswordAuth,
-		ClientId:       aws.String(s.userPoolClientID),
+		ClientId:       aws.String(clientID),
 		AuthParameters: authParams,
 	}
 
@@ -73,7 +87,7 @@ func (s *LoginService) Authenticate(ctx context.Context, req *LoginRequest) (*Lo
 	// Build response
 	response := &LoginResponse{
 		TokenType: "Bearer",
-		ExpiresIn: aws.ToInt32(result.AuthenticationResult.ExpiresIn),
+		ExpiresIn: result.AuthenticationResult.ExpiresIn,
 	}
 
 	// Include tokens if present
@@ -88,4 +102,60 @@ func (s *LoginService) Authenticate(ctx context.Context, req *LoginRequest) (*Lo
 	}
 
 	return response, nil
+}
+
+// findUserPoolByName discovers a user pool by its name
+func (s *LoginService) findUserPoolByName(ctx context.Context, poolName string) (string, error) {
+	paginator := cognitoidentityprovider.NewListUserPoolsPaginator(s.cognitoClient, &cognitoidentityprovider.ListUserPoolsInput{
+		MaxResults: aws.Int32(60),
+	})
+
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return "", fmt.Errorf("failed to list user pools: %w", err)
+		}
+
+		for _, pool := range page.UserPools {
+			if pool.Name != nil && *pool.Name == poolName {
+				return *pool.Id, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("user pool not found: %s", poolName)
+}
+
+// findUserPoolClient discovers a user pool client by name
+func (s *LoginService) findUserPoolClient(ctx context.Context, userPoolID, clientName string) (string, error) {
+	paginator := cognitoidentityprovider.NewListUserPoolClientsPaginator(s.cognitoClient, &cognitoidentityprovider.ListUserPoolClientsInput{
+		UserPoolId: aws.String(userPoolID),
+		MaxResults: aws.Int32(60),
+	})
+
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return "", fmt.Errorf("failed to list user pool clients: %w", err)
+		}
+
+		for _, client := range page.UserPoolClients {
+			// Get detailed client information to check the name
+			describeOutput, err := s.cognitoClient.DescribeUserPoolClient(ctx, &cognitoidentityprovider.DescribeUserPoolClientInput{
+				UserPoolId: aws.String(userPoolID),
+				ClientId:   client.ClientId,
+			})
+			if err != nil {
+				continue
+			}
+
+			if describeOutput.UserPoolClient != nil &&
+				describeOutput.UserPoolClient.ClientName != nil &&
+				*describeOutput.UserPoolClient.ClientName == clientName {
+				return *client.ClientId, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("user pool client not found: %s", clientName)
 }

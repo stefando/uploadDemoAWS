@@ -6,13 +6,18 @@
 # Alternative: Use direct API Gateway URL
 # @baseUrl = https://YOUR_API_ID.execute-api.eu-central-1.amazonaws.com/prod
 
-### Login as tenant-a user
-# @name loginTenantA
+# ============================================
+# MULTI-TENANT LOGIN TESTS
+# ============================================
+
+### Login as john from tenant-a
+# @name loginTenantAJohn
 POST {{baseUrl}}/login
 Content-Type: application/json
 
 {
-  "username": "user-tenant-a",
+  "tenant": "tenant-a",
+  "username": "john",
   "password": "TestPass123!"
 }
 
@@ -21,19 +26,20 @@ Content-Type: application/json
         client.assert(response.status === 200, "Response status is not 200");
         client.assert(response.body.access_token, "No access token in response");
     });
-    client.global.set("accessTokenA", response.body.access_token);
-    client.global.set("idTokenA", response.body.id_token);
+    client.global.set("accessTokenAJohn", response.body.access_token);
+    client.global.set("idTokenAJohn", response.body.id_token);
 %}
 
 ###
 
-### Login as tenant-b user
-# @name loginTenantB
+### Login as mary from tenant-a
+# @name loginTenantAMary
 POST {{baseUrl}}/login
 Content-Type: application/json
 
 {
-  "username": "user-tenant-b",
+  "tenant": "tenant-a",
+  "username": "mary",
   "password": "TestPass123!"
 }
 
@@ -42,39 +48,174 @@ Content-Type: application/json
         client.assert(response.status === 200, "Response status is not 200");
         client.assert(response.body.access_token, "No access token in response");
     });
-    client.global.set("accessTokenB", response.body.access_token);
-    client.global.set("idTokenB", response.body.id_token);
+    client.global.set("accessTokenAMary", response.body.access_token);
+    client.global.set("idTokenAMary", response.body.id_token);
 %}
 
 ###
 
-### Upload file as tenant-a
-POST {{baseUrl}}/upload
-Authorization: Bearer {{accessTokenA}}
+### Login as bob from tenant-b
+# @name loginTenantBBob
+POST {{baseUrl}}/login
 Content-Type: application/json
 
 {
-  "data": "Test data from tenant A",
-  "timestamp": "{{$timestamp}}"
+  "tenant": "tenant-b",
+  "username": "bob",
+  "password": "TestPass123!"
 }
+
+> {%
+    client.test("Login successful", function() {
+        client.assert(response.status === 200, "Response status is not 200");
+        client.assert(response.body.access_token, "No access token in response");
+    });
+    client.global.set("accessTokenBBob", response.body.access_token);
+    client.global.set("idTokenBBob", response.body.id_token);
+%}
 
 ###
 
-### Upload file as tenant-b
-POST {{baseUrl}}/upload
-Authorization: Bearer {{accessTokenB}}
+### Login as alice from tenant-b
+# @name loginTenantBAlice
+POST {{baseUrl}}/login
 Content-Type: application/json
 
 {
-  "data": "Test data from tenant B",
-  "timestamp": "{{$timestamp}}"
+  "tenant": "tenant-b",
+  "username": "alice",
+  "password": "TestPass123!"
 }
+
+> {%
+    client.test("Login successful", function() {
+        client.assert(response.status === 200, "Response status is not 200");
+        client.assert(response.body.access_token, "No access token in response");
+    });
+    client.global.set("accessTokenBAlice", response.body.access_token);
+    client.global.set("idTokenBAlice", response.body.id_token);
+%}
 
 ###
 
-### Initiate multipart upload as tenant-a
+### Test invalid tenant (should fail)
+POST {{baseUrl}}/login
+Content-Type: application/json
+
+{
+  "tenant": "invalid-tenant",
+  "username": "john",
+  "password": "TestPass123!"
+}
+
+> {%
+    client.test("Login should fail for invalid tenant", function() {
+        client.assert(response.status === 401, "Expected 401 for invalid tenant");
+    });
+%}
+
+###
+
+### Test missing tenant parameter (should fail)
+POST {{baseUrl}}/login
+Content-Type: application/json
+
+{
+  "username": "john",
+  "password": "TestPass123!"
+}
+
+> {%
+    client.test("Login should fail without tenant", function() {
+        client.assert(response.status === 400 || response.status === 401, "Expected 400 or 401 without tenant");
+    });
+%}
+
+# ============================================
+# UPLOAD TESTS - TENANT ISOLATION
+# ============================================
+
+### Upload file as john from tenant-a
+POST {{baseUrl}}/upload
+Authorization: Bearer {{accessTokenAJohn}}
+Content-Type: application/json
+
+{
+  "data": "Test data from John (tenant A)",
+  "timestamp": "{{$timestamp}}"
+}
+
+> {%
+    client.test("Upload successful", function() {
+        client.assert(response.status === 200, "Response status is not 200");
+        client.assert(response.body.file_path.startsWith("tenant-a/"), "File not stored in tenant-a prefix");
+    });
+%}
+
+###
+
+### Upload file as mary from tenant-a
+POST {{baseUrl}}/upload
+Authorization: Bearer {{accessTokenAMary}}
+Content-Type: application/json
+
+{
+  "data": "Test data from Mary (tenant A)",
+  "timestamp": "{{$timestamp}}"
+}
+
+> {%
+    client.test("Upload successful", function() {
+        client.assert(response.status === 200, "Response status is not 200");
+        client.assert(response.body.file_path.startsWith("tenant-a/"), "File not stored in tenant-a prefix");
+    });
+%}
+
+###
+
+### Upload file as bob from tenant-b
+POST {{baseUrl}}/upload
+Authorization: Bearer {{accessTokenBBob}}
+Content-Type: application/json
+
+{
+  "data": "Test data from Bob (tenant B)",
+  "timestamp": "{{$timestamp}}"
+}
+
+> {%
+    client.test("Upload successful", function() {
+        client.assert(response.status === 200, "Response status is not 200");
+        client.assert(response.body.file_path.startsWith("tenant-b/"), "File not stored in tenant-b prefix");
+    });
+%}
+
+###
+
+### Upload file as alice from tenant-b
+POST {{baseUrl}}/upload
+Authorization: Bearer {{accessTokenBAlice}}
+Content-Type: application/json
+
+{
+  "data": "Test data from Alice (tenant B)",
+  "timestamp": "{{$timestamp}}"
+}
+
+> {%
+    client.test("Upload successful", function() {
+        client.assert(response.status === 200, "Response status is not 200");
+        client.assert(response.body.file_path.startsWith("tenant-b/"), "File not stored in tenant-b prefix");
+    });
+%}
+
+# ============================================
+# MULTIPART UPLOAD TESTS
+# ============================================
+
+### Initiate multipart upload as john from tenant-a
 POST {{baseUrl}}/upload/initiate
-Authorization: Bearer {{accessTokenA}}
+Authorization: Bearer {{accessTokenAJohn}}
 Content-Type: application/json
 
 {
@@ -90,20 +231,20 @@ Content-Type: application/json
         client.assert(response.body.uploadId, "No uploadId in response");
         client.assert(response.body.presignedUrls, "No presignedUrls in response");
     });
-    client.global.set("uploadId", response.body.uploadId);
-    client.global.set("objectKey", response.body.objectKey);
+    client.global.set("uploadIdA", response.body.uploadId);
+    client.global.set("objectKeyA", response.body.objectKey);
 %}
 
 ###
 
 ### Complete multipart upload
 POST {{baseUrl}}/upload/complete
-Authorization: Bearer {{accessTokenA}}
+Authorization: Bearer {{accessTokenAJohn}}
 Content-Type: application/json
 
 {
-  "uploadId": "{{uploadId}}",
-  "objectKey": "{{objectKey}}",
+  "uploadId": "{{uploadIdA}}",
+  "objectKey": "{{objectKeyA}}",
   "parts": [
     {
       "partNumber": 1,
@@ -120,31 +261,39 @@ Content-Type: application/json
 
 ### Abort multipart upload
 POST {{baseUrl}}/upload/abort
-Authorization: Bearer {{accessTokenA}}
+Authorization: Bearer {{accessTokenAJohn}}
 Content-Type: application/json
 
 {
-  "uploadId": "{{uploadId}}",
-  "objectKey": "{{objectKey}}"
+  "uploadId": "{{uploadIdA}}",
+  "objectKey": "{{objectKeyA}}"
 }
 
 ###
 
 ### Refresh presigned URLs
 POST {{baseUrl}}/upload/refresh
-Authorization: Bearer {{accessTokenA}}
+Authorization: Bearer {{accessTokenAJohn}}
 Content-Type: application/json
 
 {
-  "uploadId": "{{uploadId}}",
-  "objectKey": "{{objectKey}}",
+  "uploadId": "{{uploadIdA}}",
+  "objectKey": "{{objectKeyA}}",
   "partNumbers": [1, 2, 3]
 }
 
-###
+# ============================================
+# GENERAL API TESTS
+# ============================================
 
 ### Health check (no auth required)
 GET {{baseUrl}}/health
+
+> {%
+    client.test("Health check successful", function() {
+        client.assert(response.status === 200, "Response status is not 200");
+    });
+%}
 
 ###
 
@@ -155,3 +304,30 @@ Content-Type: application/json
 {
   "test": "Should fail without auth"
 }
+
+> {%
+    client.test("Unauthorized access should fail", function() {
+        client.assert(response.status === 401 || response.status === 403, "Expected 401 or 403 without auth");
+    });
+%}
+
+###
+
+### Test cross-tenant access (bob trying to use alice's token - should succeed but still tenant-b)
+POST {{baseUrl}}/upload
+Authorization: Bearer {{accessTokenBAlice}}
+Content-Type: application/json
+
+{
+  "data": "Bob using Alice's token (both tenant B)",
+  "timestamp": "{{$timestamp}}"
+}
+
+> {%
+    client.test("Same tenant access should work", function() {
+        client.assert(response.status === 200, "Response status is not 200");
+        client.assert(response.body.file_path.startsWith("tenant-b/"), "File not stored in tenant-b prefix");
+    });
+%}
+
+###

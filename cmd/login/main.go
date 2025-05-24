@@ -24,19 +24,19 @@ func init() {
 		log.Fatalf("Failed to load AWS config: %v", err)
 	}
 
-	// Get Cognito configuration from environment variables
-	userPoolClientID := os.Getenv("USER_POOL_CLIENT_ID")
-	if userPoolClientID == "" {
-		log.Fatal("USER_POOL_CLIENT_ID environment variable not set")
+	// Get stack name from environment variables
+	stackName := os.Getenv("STACK_NAME")
+	if stackName == "" {
+		log.Fatal("STACK_NAME environment variable not set")
 	}
-	userPoolID := os.Getenv("USER_POOL_ID")
-	if userPoolID == "" {
-		log.Fatal("USER_POOL_ID environment variable not set")
+	region := os.Getenv("AWS_REGION")
+	if region == "" {
+		log.Fatal("AWS_REGION environment variable not set")
 	}
 
 	// Initialize login service
-	loginService = auth.NewLoginService(cfg, userPoolID, userPoolClientID)
-	log.Printf("Login service initialized for user pool: %s", userPoolID)
+	loginService = auth.NewLoginService(cfg, stackName, region)
+	log.Printf("Login service initialized for stack: %s in region: %s", stackName, region)
 }
 
 // handleLogin processes the Lambda event directly without Chi router

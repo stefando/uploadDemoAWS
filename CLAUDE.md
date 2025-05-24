@@ -17,27 +17,28 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
   - **Upload Lambda** (`cmd/lambda`): Handles all file operations (`/upload/*` endpoints)
   - **Login Lambda** (`cmd/login`): Handles authentication (`/login` endpoint)
   - **Authorizer Lambda** (`lambda/authorizer`): Validates JWT tokens for protected endpoints
-  - **Pre-token Lambda** (`lambda/pre-token`): Adds tenant claims to Cognito tokens
+  - **Pre-token Lambdas** (`lambda/pre-token`): Per-tenant Lambdas that add tenant claims to Cognito tokens
 - **API Endpoints:**
-  - `/login` - Authenticate and receive JWT tokens (no auth required)
+  - `/login` - Authenticate with tenant parameter and receive JWT tokens (no auth required)
   - `/upload` - Direct JSON upload (requires auth)
   - `/upload/initiate` - Start multipart upload (requires auth)
   - `/upload/complete` - Complete multipart upload (requires auth)
   - `/upload/abort` - Cancel multipart upload (requires auth)
   - `/upload/refresh` - Refresh presigned URLs (requires auth)
   - `/health` - Health check (no auth required)
-- **Multi-tenancy:** Two tenants (`tenant-a`, `tenant-b`) with shared S3 bucket using tenant-prefixed paths
-- **Authentication:** AWS Cognito User Pool producing JWT tokens with tenant claims
+- **Multi-tenancy:** Separate Cognito User Pools per tenant with naming convention discovery
+- **Authentication:** Multiple Cognito User Pools (one per tenant) producing JWT tokens with tenant claims
 - **Storage:** Single shared S3 bucket (`store-shared`) with tenant-prefixed paths
 - **Security:** Session tag-based S3 access control via AssumeRole with tenant tags
 - **Deployment:** CloudFormation/SAM with Route53 integration on `stefando.me`
 
 ### Security Model
-- Cognito User Pool with V2_0 pre-token generation adds `tenant_id` claim to both ID and access tokens
-- API Gateway uses REQUEST type Lambda authorizer with **access tokens** sent via Authorization header
-- Lambda authorizer validates JWT tokens using OIDC and extracts tenant information
-- **Current Implementation:** AssumeRole with tenant session tags for S3 access control
-- **Authorization Chain:** REQUEST type Lambda authorizer → OIDC JWT validation → tenant extraction → AssumeRole with tags → S3 access
+- **Multi-tenant Cognito:** Separate User Pools per tenant, discovered by naming convention (`{stack-name}-{tenant-id}-user-pool`)
+- **Pre-token Generation:** Each tenant has dedicated Lambda with V2_0 trigger that adds `tenant_id` claim to tokens
+- **API Gateway:** REQUEST type Lambda authorizer validates **access tokens** sent via Authorization header
+- **Multi-issuer Support:** Lambda authorizer validates tokens against multiple Cognito issuers (one per tenant)
+- **Tenant Isolation:** AssumeRole with tenant session tags ensures S3 access is scoped to tenant prefix
+- **Authorization Chain:** Login with tenant → User Pool discovery → JWT with tenant claim → Multi-issuer validation → AssumeRole with tags → S3 access
 - **Session Duration:** 3 hours for assumed role credentials, 2 hours for presigned URLs
 
 ### Deployment Strategy
@@ -70,12 +71,17 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
 ## Architecture Details
 
 ### Multi-tenant Flow
-1. User authenticates with Cognito → receives access token with `tenant_id` claim (via V2_0 pre-token generation)
-2. API request includes access token in Authorization header
-3. API Gateway invokes REQUEST type Lambda authorizer for validation
-4. Lambda authorizer validates JWT using OIDC and returns tenant information in context
-5. Lambda assumes role with tenant session tags for S3 access
-6. Lambda stores files in shared bucket with tenant-prefixed paths using assumed credentials
+1. User authenticates with `/login` endpoint providing tenant, username, and password
+2. Login Lambda discovers correct User Pool by naming convention (`{stack-name}-{tenant-id}-user-pool`)
+3. Cognito authenticates user and triggers tenant-specific pre-token Lambda
+4. Pre-token Lambda adds `tenant_id` claim to both ID and access tokens
+5. Client receives JWT tokens with embedded tenant information
+6. API request includes access token in Authorization header
+7. API Gateway invokes REQUEST type Lambda authorizer for validation
+8. Lambda authorizer tries each valid issuer until token validates successfully
+9. Authorizer extracts tenant_id claim and passes it in request context
+10. Upload Lambda assumes role with tenant session tags for S3 access
+11. Lambda stores files in shared bucket with tenant-prefixed paths using assumed credentials
 
 ### File Storage Pattern
 - **Direct upload path:** `s3://store-shared/{tenant-id}/YYYY/MM/DD/{guid}.json`
@@ -97,19 +103,51 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
 4. **S3 Access:** Presigned URLs generated with tenant-scoped credentials for multipart uploads
 
 ## Cognito Configuration
-- **User Pool:** Manages user accounts and authentication with V2_0 pre-token generation
-- **User Pool Client:** Handles JWT token generation and validation
-- **Custom Claims:** Tenant ID embedded in both ID and access token payloads via pre-token Lambda
-- **Token Usage:** Lambda authorizer uses **access tokens** (not ID tokens) via Authorization header
-- **Hardcoded Users:** `user-tenant-a` and `user-tenant-b` for demo purposes
+- **User Pools:** Separate pools per tenant following naming convention:
+  - `{stack-name}-tenant-a-user-pool` for tenant A
+  - `{stack-name}-tenant-b-user-pool` for tenant B
+- **User Pool Clients:** Each pool has its own client for JWT token generation
+- **Pre-token Lambdas:** Tenant-specific Lambdas triggered by V2_0 hooks:
+  - Each Lambda has `TENANT_ID` environment variable set
+  - Adds `tenant_id` claim to both ID and access tokens
+- **Token Usage:** Lambda authorizer validates **access tokens** via Authorization header
+- **User Discovery:** Login endpoint uses tenant parameter to find correct User Pool
 
 ## AWS Resources Created
-- Lambda Function with execution role
-- API Gateway with custom domain
-- Cognito User Pool and Client
-- Single S3 bucket with tenant-prefixed storage
-- IAM roles and policies for tag-based access
-- Route53 record for API endpoint (using existing hosted zone)
+- **Lambda Functions:**
+  - Upload Lambda with execution role
+  - Login Lambda with Cognito permissions
+  - Authorizer Lambda for JWT validation
+  - Pre-token Lambdas (one per tenant)
+- **API Gateway:** REST API with custom domain and REQUEST authorizer
+- **Cognito Resources:**
+  - User Pool for tenant-a with client
+  - User Pool for tenant-b with client
+  - Pre-token Lambda triggers for each pool
+- **Storage:** Single S3 bucket with tenant-prefixed paths
+- **IAM:** Roles and policies for tag-based tenant isolation
+- **DNS:** Route53 record for custom domain (using existing hosted zone)
+
+## Multi-tenant Architecture Benefits
+
+### Separate User Pools Per Tenant
+- **Complete Isolation:** Each tenant has its own authentication boundary
+- **Independent Configuration:** Password policies, MFA settings, and user attributes can vary per tenant
+- **Separate User Namespaces:** Users can have the same username across different tenants
+- **Compliance:** Easier to meet data residency and compliance requirements per tenant
+- **Scalability:** User pools can be managed, scaled, and migrated independently
+
+### Naming Convention Discovery
+- **No Additional Infrastructure:** No need for DynamoDB tables or configuration services
+- **Predictable:** User pool location follows `{stack-name}-{tenant-id}-user-pool` pattern
+- **Easy Testing:** Clear which resources belong to which tenant
+- **CloudFormation Friendly:** Resources can be created and managed declaratively
+
+### Security Considerations
+- **Multi-issuer Validation:** Authorizer validates tokens from any registered tenant's user pool
+- **Tenant Claims:** Pre-token Lambda ensures tenant_id is always present in tokens
+- **No Cross-tenant Access:** Users authenticated in one tenant cannot access another tenant's resources
+- **Session Tagging:** S3 access is further restricted by IAM session tags matching the tenant
 
 ## Development Notes
 - Target audience: Senior engineers new to Go/AWS
@@ -137,46 +175,98 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
 
 ### Setting Up Test Users
 
-After deployment, you need to create and configure Cognito users for testing:
+After deployment, you need to create users in each tenant's Cognito User Pool:
 
-1. Create user for tenant-a:
+#### Tenant A Users
+
+1. Create john in tenant-a:
    ```bash
    aws cognito-idp admin-create-user \
-     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text) \
-     --username user-tenant-a \
+     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolIdTenantA'].OutputValue" --output text) \
+     --username john \
+     --user-attributes Name=email,Value=john@tenant-a.com \
      --message-action SUPPRESS \
      --temporary-password TempPass123! \
      --profile personal \
      --region eu-central-1
    ```
 
-2. Set permanent password for tenant-a user:
+2. Set permanent password for john:
    ```bash
    aws cognito-idp admin-set-user-password \
-     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text) \
-     --username user-tenant-a \
+     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolIdTenantA'].OutputValue" --output text) \
+     --username john \
      --password TestPass123! \
      --permanent \
      --profile personal \
      --region eu-central-1
    ```
 
-3. Create user for tenant-b:
+3. Create mary in tenant-a:
    ```bash
    aws cognito-idp admin-create-user \
-     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text) \
-     --username user-tenant-b \
+     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolIdTenantA'].OutputValue" --output text) \
+     --username mary \
+     --user-attributes Name=email,Value=mary@tenant-a.com \
      --message-action SUPPRESS \
      --temporary-password TempPass123! \
      --profile personal \
      --region eu-central-1
    ```
 
-4. Set permanent password for tenant-b user:
+4. Set permanent password for mary:
    ```bash
    aws cognito-idp admin-set-user-password \
-     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text) \
-     --username user-tenant-b \
+     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolIdTenantA'].OutputValue" --output text) \
+     --username mary \
+     --password TestPass123! \
+     --permanent \
+     --profile personal \
+     --region eu-central-1
+   ```
+
+#### Tenant B Users
+
+5. Create bob in tenant-b:
+   ```bash
+   aws cognito-idp admin-create-user \
+     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolIdTenantB'].OutputValue" --output text) \
+     --username bob \
+     --user-attributes Name=email,Value=bob@tenant-b.com \
+     --message-action SUPPRESS \
+     --temporary-password TempPass123! \
+     --profile personal \
+     --region eu-central-1
+   ```
+
+6. Set permanent password for bob:
+   ```bash
+   aws cognito-idp admin-set-user-password \
+     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolIdTenantB'].OutputValue" --output text) \
+     --username bob \
+     --password TestPass123! \
+     --permanent \
+     --profile personal \
+     --region eu-central-1
+   ```
+
+7. Create alice in tenant-b:
+   ```bash
+   aws cognito-idp admin-create-user \
+     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolIdTenantB'].OutputValue" --output text) \
+     --username alice \
+     --user-attributes Name=email,Value=alice@tenant-b.com \
+     --message-action SUPPRESS \
+     --temporary-password TempPass123! \
+     --profile personal \
+     --region eu-central-1
+   ```
+
+8. Set permanent password for alice:
+   ```bash
+   aws cognito-idp admin-set-user-password \
+     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolIdTenantB'].OutputValue" --output text) \
+     --username alice \
      --password TestPass123! \
      --permanent \
      --profile personal \
@@ -189,51 +279,58 @@ Both the custom domain (upload-api.stefando.me) and direct API Gateway endpoint 
 
 #### Step 1: Get Access Tokens
 
-**Preferred Method - Using Login API:**
+**Using Multi-tenant Login API:**
 
-1. Login as tenant-a:
+1. Login as john from tenant-a:
    ```bash
    # Using custom domain
    curl -X POST https://upload-api.stefando.me/login \
      -H "Content-Type: application/json" \
-     -d '{"username": "user-tenant-a", "password": "TestPass123!"}' \
+     -d '{"tenant": "tenant-a", "username": "john", "password": "TestPass123!"}' \
      | jq -r '.access_token'
    
    # Or using direct API endpoint
    curl -X POST https://${API_ID}.execute-api.eu-central-1.amazonaws.com/prod/login \
      -H "Content-Type: application/json" \
-     -d '{"username": "user-tenant-a", "password": "TestPass123!"}' \
+     -d '{"tenant": "tenant-a", "username": "john", "password": "TestPass123!"}' \
      | jq -r '.access_token'
    ```
 
-2. Login as tenant-b:
+2. Login as bob from tenant-b:
    ```bash
    # Using custom domain
    curl -X POST https://upload-api.stefando.me/login \
      -H "Content-Type: application/json" \
-     -d '{"username": "user-tenant-b", "password": "TestPass123!"}' \
+     -d '{"tenant": "tenant-b", "username": "bob", "password": "TestPass123!"}' \
      | jq -r '.access_token'
    ```
 
-**Alternative Method - Using AWS CLI (backup):**
+3. Test invalid tenant (should fail):
+   ```bash
+   curl -X POST https://upload-api.stefando.me/login \
+     -H "Content-Type: application/json" \
+     -d '{"tenant": "invalid-tenant", "username": "john", "password": "TestPass123!"}'
+   ```
 
-1. Get access token for tenant-a:
+**Alternative Method - Using AWS CLI (direct Cognito access):**
+
+1. Get access token for john in tenant-a:
    ```bash
    aws cognito-idp initiate-auth \
      --auth-flow USER_PASSWORD_AUTH \
-     --client-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" --output text) \
-     --auth-parameters USERNAME=user-tenant-a,PASSWORD=TestPass123! \
+     --client-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientIdTenantA'].OutputValue" --output text) \
+     --auth-parameters USERNAME=john,PASSWORD=TestPass123! \
      --profile personal \
      --region eu-central-1 \
      --query "AuthenticationResult.AccessToken" --output text
    ```
 
-2. Get access token for tenant-b:
+2. Get access token for bob in tenant-b:
    ```bash
    aws cognito-idp initiate-auth \
      --auth-flow USER_PASSWORD_AUTH \
-     --client-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" --output text) \
-     --auth-parameters USERNAME=user-tenant-b,PASSWORD=TestPass123! \
+     --client-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientIdTenantB'].OutputValue" --output text) \
+     --auth-parameters USERNAME=bob,PASSWORD=TestPass123! \
      --profile personal \
      --region eu-central-1 \
      --query "AuthenticationResult.AccessToken" --output text

@@ -12,9 +12,7 @@ import (
 )
 
 var (
-	poolID   = mustEnv("COGNITO_POOL_ID")
-	region   = mustEnv("COGNITO_REGION")
-	clientID = mustEnv("COGNITO_CLIENT_ID")
+	validIssuers = strings.Split(mustEnv("VALID_ISSUERS"), " ")
 )
 
 func mustEnv(name string) string {
@@ -26,38 +24,58 @@ func mustEnv(name string) string {
 }
 
 func ValidateToken(tokenStr string) (string, error) {
-	issuer := fmt.Sprintf("https://cognito-idp.%s.amazonaws.com/%s", region, poolID)
+	// Try each valid issuer until one works
+	var lastError error
+	
+	for _, issuer := range validIssuers {
+		issuer = strings.TrimSpace(issuer)
+		if issuer == "" {
+			continue
+		}
+		
+		log.Printf("🔍 Trying issuer: %s", issuer)
+		
+		// Connect to Cognito's OIDC JWKS endpoint
+		provider, err := oidc.NewProvider(context.Background(), issuer)
+		if err != nil {
+			lastError = fmt.Errorf("oidc provider error for issuer %s: %w", issuer, err)
+			continue
+		}
 
-	// Connect to Cognito’s OIDC JWKS endpoint
-	provider, err := oidc.NewProvider(context.Background(), issuer)
-	if err != nil {
-		return "", fmt.Errorf("oidc provider error: %w", err)
+		// For access tokens, skip audience check as they don't have 'aud' claim
+		verifier := provider.Verifier(&oidc.Config{
+			SkipClientIDCheck: true, // Access tokens don't have audience claim
+		})
+
+		// This will check sig, expiry, issuer, and aud for you
+		idToken, err := verifier.Verify(context.Background(), tokenStr)
+		if err != nil {
+			lastError = fmt.Errorf("token verification failed for issuer %s: %w", issuer, err)
+			continue
+		}
+
+		// You can extract any JWT claim as a map
+		var claims map[string]interface{}
+		if err := idToken.Claims(&claims); err != nil {
+			lastError = fmt.Errorf("decoding claims for issuer %s: %w", issuer, err)
+			continue
+		}
+
+		// Pull out your custom tenant claim
+		tenant, _ := claims["tenant_id"].(string)
+		if tenant == "" {
+			lastError = fmt.Errorf("missing tenant_id claim for issuer %s", issuer)
+			continue
+		}
+
+		log.Printf("✅ Token validated with issuer: %s, tenant: %s", issuer, tenant)
+		return tenant, nil
 	}
 
-	// For access tokens, skip audience check as they don't have 'aud' claim
-	verifier := provider.Verifier(&oidc.Config{
-		SkipClientIDCheck: true, // Access tokens don't have audience claim
-	})
-
-	// This will check sig, expiry, issuer, and aud for you
-	idToken, err := verifier.Verify(context.Background(), tokenStr)
-	if err != nil {
-		return "", fmt.Errorf("token verification failed: %w", err)
+	if lastError != nil {
+		return "", fmt.Errorf("token validation failed against all issuers: %w", lastError)
 	}
-
-	// You can extract any JWT claim as a map
-	var claims map[string]interface{}
-	if err := idToken.Claims(&claims); err != nil {
-		return "", fmt.Errorf("decoding claims: %w", err)
-	}
-
-	// Pull out your custom tenant claim
-	tenant, _ := claims["tenant_id"].(string)
-	if tenant == "" {
-		return "", fmt.Errorf("missing tenant_id claim")
-	}
-
-	return tenant, nil
+	return "", fmt.Errorf("no valid issuers configured")
 }
 
 func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequestTypeRequest) (events.APIGatewayCustomAuthorizerResponse, error) {
