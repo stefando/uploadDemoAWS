@@ -13,19 +13,25 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
 ## Requirements Summary
 
 ### Core Architecture
-- **AWS Lambda Function:** Single endpoint `/upload` (expandable with Chi router)
+- **AWS Lambda Function:** Multiple endpoints for file operations:
+  - `/upload` - Direct JSON upload
+  - `/upload/initiate` - Start multipart upload
+  - `/upload/complete` - Complete multipart upload
+  - `/upload/abort` - Cancel multipart upload
+  - `/upload/refresh` - Refresh presigned URLs
 - **Multi-tenancy:** Two tenants (`tenant-a`, `tenant-b`) with shared S3 bucket using tenant-prefixed paths
 - **Authentication:** AWS Cognito User Pool producing JWT tokens with tenant claims
-- **Storage:** Single shared S3 bucket (`store-shared`) with tenant-prefixed file format `<tenant-id>/YYYY/MM/DD/<guid>.json`
-- **Security:** Resource tag → session tag matching for S3 access control
+- **Storage:** Single shared S3 bucket (`store-shared`) with tenant-prefixed paths
+- **Security:** Session tag-based S3 access control via AssumeRole with tenant tags
 - **Deployment:** CloudFormation/SAM with Route53 integration on `stefando.me`
 
 ### Security Model
 - Cognito User Pool with V2_0 pre-token generation adds `tenant_id` claim to both ID and access tokens
-- API Gateway uses REQUEST type Lambda authorizer with **access tokens** sent via X-Auth-Token header
+- API Gateway uses REQUEST type Lambda authorizer with **access tokens** sent via Authorization header
 - Lambda authorizer validates JWT tokens using OIDC and extracts tenant information
-- **Current Implementation:** Basic IAM permissions allow access to entire shared bucket
-- **Authorization Chain:** REQUEST type Lambda authorizer → OIDC JWT validation → tenant extraction → S3 access
+- **Current Implementation:** AssumeRole with tenant session tags for S3 access control
+- **Authorization Chain:** REQUEST type Lambda authorizer → OIDC JWT validation → tenant extraction → AssumeRole with tags → S3 access
+- **Session Duration:** 3 hours for assumed role credentials, 2 hours for presigned URLs
 
 ### Deployment Strategy
 - Use `provided.al2023` runtime with compiled Go binary named `bootstrap`
@@ -58,28 +64,36 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
 
 ### Multi-tenant Flow
 1. User authenticates with Cognito → receives access token with `tenant_id` claim (via V2_0 pre-token generation)
-2. API request includes access token in X-Auth-Token header
+2. API request includes access token in Authorization header
 3. API Gateway invokes REQUEST type Lambda authorizer for validation
 4. Lambda authorizer validates JWT using OIDC and returns tenant information in context
-5. **Current:** Lambda stores files in shared bucket with tenant-prefixed paths
-6. **TODO:** Implement session tag-based S3 access control for security isolation
+5. Lambda assumes role with tenant session tags for S3 access
+6. Lambda stores files in shared bucket with tenant-prefixed paths using assumed credentials
 
 ### File Storage Pattern
-- Path: `s3://store-shared/{tenant-id}/YYYY/MM/DD/{guid}.json`
+- **Direct upload path:** `s3://store-shared/{tenant-id}/YYYY/MM/DD/{guid}.json`
+- **Multipart upload path:** `s3://store-shared/{tenant-id}/{container-key}/{guid}`
 - Single bucket with tenant-prefixed paths for isolation
-- GUID ensures unique filenames within daily folders
+- GUID ensures unique filenames
+
+### Multipart Upload Flow
+1. **Initiate:** Client calls `/upload/initiate` with file size and part size
+2. **Upload Parts:** Client uploads directly to S3 using presigned URLs (2-hour validity)
+3. **Complete:** Client calls `/upload/complete` with ETags from S3
+4. **Refresh:** Client can call `/upload/refresh` to get new presigned URLs if needed
+5. **Abort:** Client can call `/upload/abort` to cancel an in-progress upload
 
 ### Security Layers
-1. **API Gateway:** REQUEST type Lambda authorizer validates access tokens from X-Auth-Token header
+1. **API Gateway:** REQUEST type Lambda authorizer validates access tokens from Authorization header
 2. **Lambda Function:** Extracts tenant claims from authorizer context
-3. **Current IAM:** Basic permissions allow access to entire shared bucket
-4. **TODO:** Implement tag-based IAM policies and S3 bucket policies for tenant isolation
+3. **Lambda IAM:** AssumeRole with session tagging for tenant-scoped S3 access
+4. **S3 Access:** Presigned URLs generated with tenant-scoped credentials for multipart uploads
 
 ## Cognito Configuration
 - **User Pool:** Manages user accounts and authentication with V2_0 pre-token generation
 - **User Pool Client:** Handles JWT token generation and validation
 - **Custom Claims:** Tenant ID embedded in both ID and access token payloads via pre-token Lambda
-- **Token Usage:** Lambda authorizer uses **access tokens** (not ID tokens) via X-Auth-Token header
+- **Token Usage:** Lambda authorizer uses **access tokens** (not ID tokens) via Authorization header
 - **Hardcoded Users:** `user-tenant-a` and `user-tenant-b` for demo purposes
 
 ## AWS Resources Created
@@ -209,7 +223,7 @@ Use verbose curl without progress meter. You can use either the direct API Gatew
    ```bash
    curl -v -s -X POST \
      https://${API_ID}.execute-api.eu-central-1.amazonaws.com/prod/upload \
-     -H "X-Auth-Token: [ACCESS_TOKEN_A]" \
+     -H "Authorization: Bearer [ACCESS_TOKEN_A]" \
      -H "Content-Type: application/json" \
      -d '{"test": "data from tenant-a"}'
    ```
@@ -218,7 +232,7 @@ Use verbose curl without progress meter. You can use either the direct API Gatew
    ```bash
    curl -v -s -X POST \
      https://upload-api.stefando.me/upload \
-     -H "X-Auth-Token: [ACCESS_TOKEN_A]" \
+     -H "Authorization: Bearer [ACCESS_TOKEN_A]" \
      -H "Content-Type: application/json" \
      -d '{"test": "data from tenant-a"}'
    ```
@@ -227,7 +241,7 @@ Use verbose curl without progress meter. You can use either the direct API Gatew
    ```bash
    curl -v -s -X POST \
      https://${API_ID}.execute-api.eu-central-1.amazonaws.com/prod/upload \
-     -H "X-Auth-Token: [ACCESS_TOKEN_B]" \
+     -H "Authorization: Bearer [ACCESS_TOKEN_B]" \
      -H "Content-Type: application/json" \
      -d '{"test": "data from tenant-b"}'
    ```
@@ -236,7 +250,7 @@ Use verbose curl without progress meter. You can use either the direct API Gatew
    ```bash
    curl -v -s -X POST \
      https://upload-api.stefando.me/upload \
-     -H "X-Auth-Token: [ACCESS_TOKEN_B]" \
+     -H "Authorization: Bearer [ACCESS_TOKEN_B]" \
      -H "Content-Type: application/json" \
      -d '{"test": "data from tenant-b"}'
    ```
@@ -279,6 +293,6 @@ aws cloudformation delete-stack --stack-name upload-demo-stack --profile persona
 - **Authorization Chain:** REQUEST type Lambda authorizer validates access tokens using OIDC library
 - **Custom Domain:** REGIONAL endpoint configuration enables custom domain support (upload-api.stefando.me)
 - **curl Commands:** Always use `curl -v -s` (verbose without progress meter) for debugging authorization
-- **Access Tokens:** Use AccessToken (not IdToken) sent via X-Auth-Token header to avoid AWS SigV4 conflicts
-- **Header Processing:** Lambda authorizer extracts token from X-Auth-Token header (case-insensitive)
+- **Access Tokens:** Use AccessToken (not IdToken) sent via Authorization header with Bearer prefix
+- **Header Processing:** Lambda authorizer extracts token from Authorization header with Bearer prefix
 - **Direct API Endpoint:** Use `https://{api-id}.execute-api.{region}.amazonaws.com/{stage}` format for testing

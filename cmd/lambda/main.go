@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/stefando/uploadDemoAWS/internal/auth"
+	"github.com/stefando/uploadDemoAWS/internal/models"
 	"github.com/stefando/uploadDemoAWS/internal/upload"
 )
 
@@ -51,12 +52,14 @@ func setupRouter() *chi.Mux {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(auth.TenantMiddleware) // Add tenant information to all requests
 
 	// API routes
 	r.Route("/upload", func(r chi.Router) {
 		r.Post("/", handleUpload)
-		// Future endpoints would go here as we expand the API
+		r.Post("/initiate", handleInitiateUpload)
+		r.Post("/complete", handleCompleteUpload)
+		r.Post("/abort", handleAbortUpload)
+		r.Post("/refresh", handleRefreshUpload)
 	})
 
 	// Health check endpoint
@@ -70,7 +73,7 @@ func setupRouter() *chi.Mux {
 
 // handleUpload processes file upload requests
 func handleUpload(w http.ResponseWriter, r *http.Request) {
-	// Get tenant ID from the context (set by TenantMiddleware)
+	// Get tenant ID from the context (set by Lambda authorizer)
 	tenantID, ok := auth.GetTenantID(r.Context())
 	if !ok {
 		http.Error(w, "Tenant ID not found in request context", http.StatusUnauthorized)
@@ -91,7 +94,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use the context that already has tenant information (from middleware)
+	// Use the context that already has tenant information
 	ctx := r.Context()
 
 	// Upload the file to S3
@@ -104,14 +107,131 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Return success response with file path
 	response := map[string]string{
-		"status":   "success",
+		"status":    "success",
 		"file_path": filePath,
 		"tenant_id": tenantID,
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(response)
+}
+
+// handleInitiateUpload handles multipart upload initiation
+func handleInitiateUpload(w http.ResponseWriter, r *http.Request) {
+	// Get tenant ID from the context
+	tenantID, ok := auth.GetTenantID(r.Context())
+	if !ok {
+		http.Error(w, "Tenant ID not found in request context", http.StatusUnauthorized)
+		return
+	}
+
+	// Parse request body
+	var req models.InitiateUploadRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Initiate multipart upload
+	resp, err := uploadService.InitiateMultipartUpload(r.Context(), tenantID, &req)
+	if err != nil {
+		log.Printf("Initiate upload error: %v", err)
+		http.Error(w, "Failed to initiate upload", http.StatusInternalServerError)
+		return
+	}
+
+	// Return response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleCompleteUpload handles multipart upload completion
+func handleCompleteUpload(w http.ResponseWriter, r *http.Request) {
+	// Get tenant ID from the context
+	tenantID, ok := auth.GetTenantID(r.Context())
+	if !ok {
+		http.Error(w, "Tenant ID not found in request context", http.StatusUnauthorized)
+		return
+	}
+
+	// Parse request body
+	var req models.CompleteUploadRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Complete multipart upload
+	resp, err := uploadService.CompleteMultipartUpload(r.Context(), tenantID, &req)
+	if err != nil {
+		log.Printf("Complete upload error: %v", err)
+		http.Error(w, "Failed to complete upload", http.StatusInternalServerError)
+		return
+	}
+
+	// Return response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleAbortUpload handles multipart upload abort
+func handleAbortUpload(w http.ResponseWriter, r *http.Request) {
+	// Get tenant ID from the context
+	tenantID, ok := auth.GetTenantID(r.Context())
+	if !ok {
+		http.Error(w, "Tenant ID not found in request context", http.StatusUnauthorized)
+		return
+	}
+
+	// Parse request body
+	var req models.AbortUploadRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Abort multipart upload
+	if err := uploadService.AbortMultipartUpload(r.Context(), tenantID, &req); err != nil {
+		log.Printf("Abort upload error: %v", err)
+		http.Error(w, "Failed to abort upload", http.StatusInternalServerError)
+		return
+	}
+
+	// Return success response
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleRefreshUpload handles refreshing presigned URLs for multipart upload
+func handleRefreshUpload(w http.ResponseWriter, r *http.Request) {
+	// Get tenant ID from the context
+	tenantID, ok := auth.GetTenantID(r.Context())
+	if !ok {
+		http.Error(w, "Tenant ID not found in request context", http.StatusUnauthorized)
+		return
+	}
+
+	// Parse request body
+	var req models.RefreshUploadRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Refresh presigned URLs
+	resp, err := uploadService.RefreshPresignedUrls(r.Context(), tenantID, &req)
+	if err != nil {
+		log.Printf("Refresh upload error: %v", err)
+		http.Error(w, "Failed to refresh presigned URLs", http.StatusInternalServerError)
+		return
+	}
+
+	// Return response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
 }
 
 // lambdaHandler is the main Lambda handler function that adapts API Gateway events

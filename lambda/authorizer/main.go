@@ -68,15 +68,15 @@ func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest
 	// Log all available headers for debugging
 	log.Printf("📋 All Headers: %+v", event.Headers)
 	
-	// Extract X-Auth-Token header from REQUEST event (avoiding AWS Authorization header processing)
-	authHeader, exists := event.Headers["X-Auth-Token"]
+	// Extract Authorization header from REQUEST event
+	authHeader, exists := event.Headers["Authorization"]
 	if !exists {
-		authHeader, exists = event.Headers["x-auth-token"] // Try lowercase
+		authHeader, exists = event.Headers["authorization"] // Try lowercase
 	}
 	
-	log.Printf("🎟️  X-Auth-Token Header Present: %v (looking for: X-Auth-Token or x-auth-token)", exists)
+	log.Printf("🎟️  Authorization Header Present: %v (looking for: Authorization or authorization)", exists)
 	if !exists {
-		log.Printf("❌ AUTHORIZATION FAILED: No X-Auth-Token header found")
+		log.Printf("❌ AUTHORIZATION FAILED: No Authorization header found")
 		return events.APIGatewayCustomAuthorizerResponse{
 			PrincipalID:    "unauthorized",
 			PolicyDocument: generatePolicy("Deny", event.MethodArn),
