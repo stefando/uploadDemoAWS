@@ -271,13 +271,13 @@ For the initial demo, create two tenants:
 ```bash
 # Create tenant-a
 task tenant-add TENANT_ID=tenant-a
-task user-add TENANT_ID=tenant-a USERNAME=john EMAIL=john@tenant-a.com
-task user-add TENANT_ID=tenant-a USERNAME=mary EMAIL=mary@tenant-a.com
+task user-add TENANT_ID=tenant-a USERNAME=tom EMAIL=tom@tenant-a.com
+task user-add TENANT_ID=tenant-a USERNAME=jerry EMAIL=jerry@tenant-a.com
 
 # Create tenant-b
 task tenant-add TENANT_ID=tenant-b
-task user-add TENANT_ID=tenant-b USERNAME=bob EMAIL=bob@tenant-b.com
-task user-add TENANT_ID=tenant-b USERNAME=alice EMAIL=alice@tenant-b.com
+task user-add TENANT_ID=tenant-b USERNAME=sylvester EMAIL=sylvester@tenant-b.com
+task user-add TENANT_ID=tenant-b USERNAME=tweety EMAIL=tweety@tenant-b.com
 ```
 
 ### Setting Up Test Users (Manual Method)
@@ -388,27 +388,27 @@ Both the custom domain (upload-api.stefando.me) and direct API Gateway endpoint 
 
 **Using Multi-tenant Login API:**
 
-1. Login as john from tenant-a:
+1. Login as tom from tenant-a:
    ```bash
    # Using custom domain
    curl -X POST https://upload-api.stefando.me/login \
      -H "Content-Type: application/json" \
-     -d '{"tenant": "tenant-a", "username": "john", "password": "TestPass123!"}' \
+     -d '{"tenant": "tenant-a", "username": "tom", "password": "TestPass123!"}' \
      | jq -r '.access_token'
    
    # Or using direct API endpoint
    curl -X POST https://${API_ID}.execute-api.eu-central-1.amazonaws.com/prod/login \
      -H "Content-Type: application/json" \
-     -d '{"tenant": "tenant-a", "username": "john", "password": "TestPass123!"}' \
+     -d '{"tenant": "tenant-a", "username": "tom", "password": "TestPass123!"}' \
      | jq -r '.access_token'
    ```
 
-2. Login as bob from tenant-b:
+2. Login as sylvester from tenant-b:
    ```bash
    # Using custom domain
    curl -X POST https://upload-api.stefando.me/login \
      -H "Content-Type: application/json" \
-     -d '{"tenant": "tenant-b", "username": "bob", "password": "TestPass123!"}' \
+     -d '{"tenant": "tenant-b", "username": "sylvester", "password": "TestPass123!"}' \
      | jq -r '.access_token'
    ```
 
@@ -416,7 +416,7 @@ Both the custom domain (upload-api.stefando.me) and direct API Gateway endpoint 
    ```bash
    curl -X POST https://upload-api.stefando.me/login \
      -H "Content-Type: application/json" \
-     -d '{"tenant": "invalid-tenant", "username": "john", "password": "TestPass123!"}'
+     -d '{"tenant": "invalid-tenant", "username": "tom", "password": "TestPass123!"}'
    ```
 
 **Alternative Method - Using AWS CLI (direct Cognito access):**
@@ -573,14 +573,14 @@ The `api-tests.http` file contains:
 
 Each test includes assertions to validate responses:
 ```http
-### Login as john from tenant-a
+### Login as tom from tenant-a
 POST {{baseUrl}}/login
 Content-Type: application/json
 
 {
-  "tenant": "tenant-a",
-  "username": "john",
-  "password": "TestPass123!"
+  "tenant": "{{tenantA}}",
+  "username": "{{userA1}}",
+  "password": "{{password}}"
 }
 
 > {%
@@ -588,7 +588,7 @@ Content-Type: application/json
         client.assert(response.status === 200, "Response status is not 200");
         client.assert(response.body.access_token, "No access token in response");
     });
-    client.global.set("accessTokenAJohn", response.body.access_token);
+    client.global.set("accessTokenATom", response.body.access_token);
 %}
 ```
 
