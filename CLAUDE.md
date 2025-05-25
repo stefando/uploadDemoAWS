@@ -414,6 +414,81 @@ Use verbose curl without progress meter. You can use either the direct API Gatew
    aws s3 ls s3://$(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='SharedStorageBucket'].OutputValue" --output text)/tenant-b/ --recursive --profile personal --region eu-central-1
    ```
 
+### Testing with JetBrains HTTP Client
+
+The project includes HTTP test files in `test/http/api-tests.http` that can be run using JetBrains IDEs or the CLI tool.
+
+#### Installing the HTTP Client CLI
+
+```bash
+# Install via Homebrew
+brew install ijhttp
+
+# Install Java 17+ if needed (required by ijhttp)
+brew install --cask temurin
+```
+
+#### Running Tests
+
+1. **Run all tests in the file:**
+   ```bash
+   cd /path/to/project
+   ijhttp test/http/api-tests.http
+   ```
+
+2. **Run with verbose logging:**
+   ```bash
+   ijhttp -L VERBOSE test/http/api-tests.http
+   ```
+
+3. **Run with environment variables:**
+   ```bash
+   # Create environment file (http-client.env.json)
+   {
+     "dev": {
+       "baseUrl": "https://upload-api.stefando.me",
+       "password": "TestPass123!"
+     }
+   }
+   
+   # Run with environment
+   ijhttp --env-file http-client.env.json --env dev test/http/api-tests.http
+   ```
+
+4. **Generate test report:**
+   ```bash
+   ijhttp --report test/http/api-tests.http
+   ```
+
+#### Test File Structure
+
+The `api-tests.http` file contains:
+- Multi-tenant login tests for different users and tenants
+- Upload tests demonstrating tenant isolation
+- Multipart upload workflow tests
+- Error cases (invalid tenant, missing auth)
+
+Each test includes assertions to validate responses:
+```http
+### Login as john from tenant-a
+POST {{baseUrl}}/login
+Content-Type: application/json
+
+{
+  "tenant": "tenant-a",
+  "username": "john",
+  "password": "TestPass123!"
+}
+
+> {%
+    client.test("Login successful", function() {
+        client.assert(response.status === 200, "Response status is not 200");
+        client.assert(response.body.access_token, "No access token in response");
+    });
+    client.global.set("accessTokenAJohn", response.body.access_token);
+%}
+```
+
 ### Cleanup
 
 To delete the entire stack and resources:
