@@ -157,6 +157,49 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
 
 ## Demo and Testing Instructions
 
+### Environment Setup
+
+Set these environment variables to simplify commands throughout the demo:
+
+```bash
+# Core configuration
+export AWS_PROFILE=personal
+export AWS_REGION=eu-central-1
+export STACK_NAME=upload-demo-stack
+
+# After deployment, get these values from CloudFormation outputs
+export USER_POOL_A=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --profile $AWS_PROFILE --region $AWS_REGION --query "Stacks[0].Outputs[?OutputKey=='UserPoolIdTenantA'].OutputValue" --output text)
+export USER_POOL_B=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --profile $AWS_PROFILE --region $AWS_REGION --query "Stacks[0].Outputs[?OutputKey=='UserPoolIdTenantB'].OutputValue" --output text)
+export CLIENT_ID_A=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --profile $AWS_PROFILE --region $AWS_REGION --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientIdTenantA'].OutputValue" --output text)
+export CLIENT_ID_B=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --profile $AWS_PROFILE --region $AWS_REGION --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientIdTenantB'].OutputValue" --output text)
+export S3_BUCKET=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --profile $AWS_PROFILE --region $AWS_REGION --query "Stacks[0].Outputs[?OutputKey=='SharedStorageBucket'].OutputValue" --output text)
+export API_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --profile $AWS_PROFILE --region $AWS_REGION --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)
+
+# API Gateway direct endpoint (optional)
+export API_ID=$(aws apigateway get-rest-apis --profile $AWS_PROFILE --region $AWS_REGION --query "items[?name=='${STACK_NAME}-api'].id" --output text)
+export API_ENDPOINT="https://${API_ID}.execute-api.${AWS_REGION}.amazonaws.com/prod"
+
+# Common test password
+export TEST_PASSWORD="TestPass123!"
+```
+
+You can save these in a file and source it:
+```bash
+# Save to .env file (add to .gitignore!)
+cat > .env.demo <<'EOF'
+export AWS_PROFILE=personal
+export AWS_REGION=eu-central-1
+export STACK_NAME=upload-demo-stack
+export TEST_PASSWORD="TestPass123!"
+EOF
+
+# Source before running commands
+source .env.demo
+
+# After deployment, update with outputs
+./scripts/update-env.sh  # Script to fetch and update CloudFormation outputs
+```
+
 ### Deployment Process
 1. Build the Lambda functions:
    ```bash
@@ -175,102 +218,102 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
 
 ### Setting Up Test Users
 
-After deployment, you need to create users in each tenant's Cognito User Pool:
+After deployment and setting up environment variables, create users in each tenant's Cognito User Pool:
 
 #### Tenant A Users
 
 1. Create john in tenant-a:
    ```bash
    aws cognito-idp admin-create-user \
-     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolIdTenantA'].OutputValue" --output text) \
+     --user-pool-id $USER_POOL_A \
      --username john \
      --user-attributes Name=email,Value=john@tenant-a.com \
      --message-action SUPPRESS \
      --temporary-password TempPass123! \
-     --profile personal \
-     --region eu-central-1
+     --profile $AWS_PROFILE \
+     --region $AWS_REGION
    ```
 
 2. Set permanent password for john:
    ```bash
    aws cognito-idp admin-set-user-password \
-     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolIdTenantA'].OutputValue" --output text) \
+     --user-pool-id $USER_POOL_A \
      --username john \
-     --password TestPass123! \
+     --password $TEST_PASSWORD \
      --permanent \
-     --profile personal \
-     --region eu-central-1
+     --profile $AWS_PROFILE \
+     --region $AWS_REGION
    ```
 
 3. Create mary in tenant-a:
    ```bash
    aws cognito-idp admin-create-user \
-     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolIdTenantA'].OutputValue" --output text) \
+     --user-pool-id $USER_POOL_A \
      --username mary \
      --user-attributes Name=email,Value=mary@tenant-a.com \
      --message-action SUPPRESS \
      --temporary-password TempPass123! \
-     --profile personal \
-     --region eu-central-1
+     --profile $AWS_PROFILE \
+     --region $AWS_REGION
    ```
 
 4. Set permanent password for mary:
    ```bash
    aws cognito-idp admin-set-user-password \
-     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolIdTenantA'].OutputValue" --output text) \
+     --user-pool-id $USER_POOL_A \
      --username mary \
-     --password TestPass123! \
+     --password $TEST_PASSWORD \
      --permanent \
-     --profile personal \
-     --region eu-central-1
+     --profile $AWS_PROFILE \
+     --region $AWS_REGION
    ```
 
 #### Tenant B Users
 
-5. Create bob in tenant-b:
+1. Create bob in tenant-b:
    ```bash
    aws cognito-idp admin-create-user \
-     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolIdTenantB'].OutputValue" --output text) \
+     --user-pool-id $USER_POOL_B \
      --username bob \
      --user-attributes Name=email,Value=bob@tenant-b.com \
      --message-action SUPPRESS \
      --temporary-password TempPass123! \
-     --profile personal \
-     --region eu-central-1
+     --profile $AWS_PROFILE \
+     --region $AWS_REGION
    ```
 
-6. Set permanent password for bob:
+2. Set permanent password for bob:
    ```bash
    aws cognito-idp admin-set-user-password \
-     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolIdTenantB'].OutputValue" --output text) \
+     --user-pool-id $USER_POOL_B \
      --username bob \
-     --password TestPass123! \
+     --password $TEST_PASSWORD \
      --permanent \
-     --profile personal \
-     --region eu-central-1
+     --profile $AWS_PROFILE \
+     --region $AWS_REGION
    ```
 
-7. Create alice in tenant-b:
+3. Create alice in tenant-b:
    ```bash
    aws cognito-idp admin-create-user \
-     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolIdTenantB'].OutputValue" --output text) \
+     --user-pool-id $USER_POOL_B \
      --username alice \
      --user-attributes Name=email,Value=alice@tenant-b.com \
      --message-action SUPPRESS \
      --temporary-password TempPass123! \
-     --profile personal \
-     --region eu-central-1
+     --profile $AWS_PROFILE \
+     --region $AWS_REGION
    ```
 
-8. Set permanent password for alice:
+4. Set permanent password for alice:
    ```bash
    aws cognito-idp admin-set-user-password \
-     --user-pool-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolIdTenantB'].OutputValue" --output text) \
+     --user-pool-id $USER_POOL_B \
      --username alice \
-     --password TestPass123! \
+     --password $TEST_PASSWORD \
      --permanent \
-     --profile personal \
-     --region eu-central-1
+     --profile $AWS_PROFILE \
+     --region $AWS_REGION
    ```
 
 ### Authentication and API Testing
@@ -318,10 +361,10 @@ Both the custom domain (upload-api.stefando.me) and direct API Gateway endpoint 
    ```bash
    aws cognito-idp initiate-auth \
      --auth-flow USER_PASSWORD_AUTH \
-     --client-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientIdTenantA'].OutputValue" --output text) \
-     --auth-parameters USERNAME=john,PASSWORD=TestPass123! \
-     --profile personal \
-     --region eu-central-1 \
+     --client-id $CLIENT_ID_A \
+     --auth-parameters USERNAME=john,PASSWORD=$TEST_PASSWORD \
+     --profile $AWS_PROFILE \
+     --region $AWS_REGION \
      --query "AuthenticationResult.AccessToken" --output text
    ```
 
@@ -329,22 +372,18 @@ Both the custom domain (upload-api.stefando.me) and direct API Gateway endpoint 
    ```bash
    aws cognito-idp initiate-auth \
      --auth-flow USER_PASSWORD_AUTH \
-     --client-id $(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientIdTenantB'].OutputValue" --output text) \
-     --auth-parameters USERNAME=bob,PASSWORD=TestPass123! \
-     --profile personal \
-     --region eu-central-1 \
+     --client-id $CLIENT_ID_B \
+     --auth-parameters USERNAME=bob,PASSWORD=$TEST_PASSWORD \
+     --profile $AWS_PROFILE \
+     --region $AWS_REGION \
      --query "AuthenticationResult.AccessToken" --output text
    ```
 
 #### Step 2: Get API Gateway Direct Endpoint
 
-Get the API Gateway ID and construct the direct endpoint:
+The API Gateway ID was already set in the environment setup section above. To verify:
 ```bash
-# Get API Gateway ID
-API_ID=$(aws apigateway get-rest-apis --profile personal --region eu-central-1 --query "items[?name=='upload-demo-stack-api'].id" --output text)
-
-# Direct endpoint format: https://{api-id}.execute-api.{region}.amazonaws.com/{stage}
-echo "Direct API endpoint: https://${API_ID}.execute-api.eu-central-1.amazonaws.com/prod"
+echo "Direct API endpoint: $API_ENDPOINT"
 ```
 
 #### Step 3: Test Upload with Correct curl Switches
@@ -401,17 +440,17 @@ Use verbose curl without progress meter. You can use either the direct API Gatew
 
 1. List all files in the shared bucket (shows tenant prefixes):
    ```bash
-   aws s3 ls s3://$(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='SharedStorageBucket'].OutputValue" --output text)/ --recursive --profile personal --region eu-central-1
+   aws s3 ls s3://$S3_BUCKET/ --recursive --profile $AWS_PROFILE --region $AWS_REGION
    ```
 
 2. List files for tenant-a only:
    ```bash
-   aws s3 ls s3://$(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='SharedStorageBucket'].OutputValue" --output text)/tenant-a/ --recursive --profile personal --region eu-central-1
+   aws s3 ls s3://$S3_BUCKET/tenant-a/ --recursive --profile $AWS_PROFILE --region $AWS_REGION
    ```
 
 3. List files for tenant-b only:
    ```bash
-   aws s3 ls s3://$(aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --region eu-central-1 --query "Stacks[0].Outputs[?OutputKey=='SharedStorageBucket'].OutputValue" --output text)/tenant-b/ --recursive --profile personal --region eu-central-1
+   aws s3 ls s3://$S3_BUCKET/tenant-b/ --recursive --profile $AWS_PROFILE --region $AWS_REGION
    ```
 
 ### Testing with JetBrains HTTP Client
@@ -489,11 +528,51 @@ Content-Type: application/json
 %}
 ```
 
+### AWS Cost Monitoring
+
+Track your AWS spending for this demo:
+```bash
+# Get current month's total AWS account costs
+aws ce get-cost-and-usage \
+  --profile $AWS_PROFILE \
+  --time-period Start=$(date -v1d +%Y-%m-%d),End=$(date -v+1d +%Y-%m-%d) \
+  --granularity=MONTHLY \
+  --metrics "UnblendedCost"
+
+# Activate CloudFormation cost allocation tags (one-time setup)
+aws ce update-cost-allocation-tags-status \
+  --profile $AWS_PROFILE \
+  --cost-allocation-tags-status TagKey=aws:cloudformation:stack-name,Status=Active
+
+# Get costs for this specific CloudFormation stack
+aws ce get-cost-and-usage \
+  --profile $AWS_PROFILE \
+  --time-period Start=$(date -v1d +%Y-%m-%d),End=$(date -v+1d +%Y-%m-%d) \
+  --granularity=MONTHLY \
+  --metrics "UnblendedCost" \
+  --filter '{
+    "Tags": {
+      "Key": "aws:cloudformation:stack-name",
+      "Values": ["'$STACK_NAME'"]
+    }
+  }'
+```
+
+**Note:** Stack-specific cost tracking:
+- Tag activation takes up to 24 hours to take effect
+- Costs only appear after resources incur charges (not retroactive)
+- Once activated, the tag remains active for all stacks in your account
+
 ### Cleanup
 
 To delete the entire stack and resources:
 ```bash
-aws cloudformation delete-stack --stack-name upload-demo-stack --profile personal --region eu-central-1
+aws cloudformation delete-stack --stack-name $STACK_NAME --profile $AWS_PROFILE --region $AWS_REGION
+```
+
+Or using the task command:
+```bash
+task delete
 ```
 
 ## Memory Notes
