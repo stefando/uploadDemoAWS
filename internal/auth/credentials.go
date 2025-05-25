@@ -13,8 +13,14 @@ import (
 // TenantInfo is a key type for storing tenant information in context
 type TenantInfo string
 
+// TokenExpiration is a key type for storing token expiration in context
+type TokenExpiration string
+
 // ContextTenantKey is the key used to store tenant information in context
 const ContextTenantKey TenantInfo = "tenant_id"
+
+// ContextTokenExpirationKey is the key used to store token expiration in context
+const ContextTokenExpirationKey TokenExpiration = "token_expiration"
 
 // TenantTaggedCredentialsProvider adds tenant tags to AWS credentials
 // This is a custom implementation to modify the session token with tenant information
@@ -54,9 +60,21 @@ func GetTenantID(ctx context.Context) (string, bool) {
 	return val, ok
 }
 
+// WithTokenExpiration adds token expiration to the context
+func WithTokenExpiration(ctx context.Context, expiration int64) context.Context {
+	return context.WithValue(ctx, ContextTokenExpirationKey, expiration)
+}
+
+// GetTokenExpiration retrieves token expiration from context
+func GetTokenExpiration(ctx context.Context) (int64, bool) {
+	val, ok := ctx.Value(ContextTokenExpirationKey).(int64)
+	return val, ok
+}
+
 // AssumeRoleForTenant assumes an IAM role with tenant-specific session tags
 // This enables fine-grained access control based on tenant identity
-func AssumeRoleForTenant(ctx context.Context, stsClient *sts.Client, roleArn, tenantID string) (aws.Credentials, error) {
+// durationSeconds controls how long the credentials are valid (max 10800 for our role)
+func AssumeRoleForTenant(ctx context.Context, stsClient *sts.Client, roleArn, tenantID string, durationSeconds int32) (aws.Credentials, error) {
 	if tenantID == "" {
 		return aws.Credentials{}, fmt.Errorf("tenant ID cannot be empty")
 	}
@@ -78,7 +96,7 @@ func AssumeRoleForTenant(ctx context.Context, stsClient *sts.Client, roleArn, te
 				Value: aws.String(tenantID),
 			},
 		},
-		DurationSeconds: aws.Int32(10800), // 3 hours (to ensure 2+ hours of validity)
+		DurationSeconds: aws.Int32(durationSeconds),
 	}
 
 	// Assume the role

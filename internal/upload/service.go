@@ -17,6 +17,23 @@ import (
 	"github.com/stefando/uploadDemoAWS/internal/models"
 )
 
+const (
+	// MinSessionDuration is the minimum duration for AWS STS AssumeRole (15 minutes)
+	MinSessionDuration = 900 // seconds
+	
+	// LongSessionDuration is the duration for operations requiring presigned URLs (3 hours)
+	LongSessionDuration = 10800 // seconds
+	
+	// PresignedURLBuffer is the time buffer before token expiration (5 minutes)
+	PresignedURLBuffer = 5 * time.Minute
+	
+	// MinPresignedURLDuration is the minimum duration for presigned URLs
+	MinPresignedURLDuration = 5 * time.Minute
+	
+	// DefaultPresignedURLDuration is the default duration for presigned URLs when no token expiration
+	DefaultPresignedURLDuration = 2 * time.Hour
+)
+
 // UploadService handles file uploads to S3 with tenant isolation
 type UploadService struct {
 	stsClient  *sts.Client
@@ -62,11 +79,20 @@ func (s *UploadService) UploadFile(ctx context.Context, tenantID string, content
 		return "", fmt.Errorf("tenant ID cannot be empty")
 	}
 
+	// Check if token has enough time left for minimum session duration
+	if tokenExp, ok := auth.GetTokenExpiration(ctx); ok {
+		timeUntilExpiry := time.Unix(tokenExp, 0).Sub(time.Now())
+		minDurationRequired := time.Duration(MinSessionDuration) * time.Second
+		if timeUntilExpiry < minDurationRequired {
+			return "", fmt.Errorf("token expires too soon for upload operation (needs at least %v, has %v)", minDurationRequired, timeUntilExpiry)
+		}
+	}
+
 	// Generate the S3 key
 	key := generateS3Key(tenantID)
 
 	// Get tenant-scoped credentials
-	tenantCreds, err := auth.AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID)
+	tenantCreds, err := auth.AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID, MinSessionDuration)
 	if err != nil {
 		return "", err
 	}
@@ -116,7 +142,7 @@ func (s *UploadService) InitiateMultipartUpload(ctx context.Context, tenantID st
 	objectKey := fmt.Sprintf("%s/%s/%s", tenantID, req.ContainerKey, uuid.New().String())
 
 	// Get tenant-scoped credentials
-	tenantCreds, err := auth.AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID)
+	tenantCreds, err := auth.AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID, LongSessionDuration)
 	if err != nil {
 		return nil, err
 	}
@@ -147,6 +173,27 @@ func (s *UploadService) InitiateMultipartUpload(ctx context.Context, tenantID st
 	numParts := int((req.Size + req.PartSize - 1) / req.PartSize)
 	presignedUrls := make(map[int]string)
 
+	// Calculate presigned URL expiration based on token expiration
+	var presignExpiration time.Duration
+	if tokenExp, ok := auth.GetTokenExpiration(ctx); ok {
+		// Token expiration is Unix timestamp in seconds
+		timeUntilExpiry := time.Unix(tokenExp, 0).Sub(time.Now())
+		if timeUntilExpiry > 0 {
+			// Use token expiration minus a small buffer (5 minutes)
+			presignExpiration = timeUntilExpiry - PresignedURLBuffer
+			if presignExpiration < MinPresignedURLDuration {
+				// Minimum 5 minutes
+				presignExpiration = MinPresignedURLDuration
+			}
+		} else {
+			// Token already expired, use minimal duration
+			presignExpiration = MinPresignedURLDuration
+		}
+	} else {
+		// No token expiration in context, default to 2 hours
+		presignExpiration = DefaultPresignedURLDuration
+	}
+
 	// Generate presigned URLs for each part
 	for i := 1; i <= numParts; i++ {
 		uploadPartReq := &s3.UploadPartInput{
@@ -157,7 +204,7 @@ func (s *UploadService) InitiateMultipartUpload(ctx context.Context, tenantID st
 		}
 
 		presignReq, err := presignClient.PresignUploadPart(ctx, uploadPartReq, func(opts *s3.PresignOptions) {
-			opts.Expires = time.Duration(2 * time.Hour) // 2 hours validity
+			opts.Expires = presignExpiration
 		})
 		if err != nil {
 			// Clean up the multipart upload
@@ -197,7 +244,7 @@ func (s *UploadService) CompleteMultipartUpload(ctx context.Context, tenantID st
 	// For now, we'll extract it from the first part's presigned URL or require it in the request
 
 	// Get tenant-scoped credentials
-	tenantCreds, err := auth.AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID)
+	tenantCreds, err := auth.AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID, MinSessionDuration)
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +303,7 @@ func (s *UploadService) AbortMultipartUpload(ctx context.Context, tenantID strin
 	}
 
 	// Get tenant-scoped credentials
-	tenantCreds, err := auth.AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID)
+	tenantCreds, err := auth.AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID, MinSessionDuration)
 	if err != nil {
 		return err
 	}
@@ -303,7 +350,7 @@ func (s *UploadService) RefreshPresignedUrls(ctx context.Context, tenantID strin
 	}
 
 	// Get tenant-scoped credentials
-	tenantCreds, err := auth.AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID)
+	tenantCreds, err := auth.AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID, LongSessionDuration)
 	if err != nil {
 		return nil, err
 	}
@@ -326,6 +373,27 @@ func (s *UploadService) RefreshPresignedUrls(ctx context.Context, tenantID strin
 		return nil, fmt.Errorf("object key cannot be empty")
 	}
 
+	// Calculate presigned URL expiration based on token expiration
+	var presignExpiration time.Duration
+	if tokenExp, ok := auth.GetTokenExpiration(ctx); ok {
+		// Token expiration is Unix timestamp in seconds
+		timeUntilExpiry := time.Unix(tokenExp, 0).Sub(time.Now())
+		if timeUntilExpiry > 0 {
+			// Use token expiration minus a small buffer (5 minutes)
+			presignExpiration = timeUntilExpiry - PresignedURLBuffer
+			if presignExpiration < MinPresignedURLDuration {
+				// Minimum 5 minutes
+				presignExpiration = MinPresignedURLDuration
+			}
+		} else {
+			// Token already expired, use minimal duration
+			presignExpiration = MinPresignedURLDuration
+		}
+	} else {
+		// No token expiration in context, default to 2 hours
+		presignExpiration = DefaultPresignedURLDuration
+	}
+
 	// Generate new presigned URLs for requested parts
 	presignedUrls := make(map[int]string)
 	for _, partNum := range req.PartNumbers {
@@ -337,7 +405,7 @@ func (s *UploadService) RefreshPresignedUrls(ctx context.Context, tenantID strin
 		}
 
 		presignReq, err := presignClient.PresignUploadPart(ctx, uploadPartReq, func(opts *s3.PresignOptions) {
-			opts.Expires = time.Duration(2 * time.Hour) // 2 hours validity
+			opts.Expires = presignExpiration
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to refresh presigned URL for part %d: %w", partNum, err)

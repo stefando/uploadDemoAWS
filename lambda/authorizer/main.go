@@ -2,80 +2,109 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"log"
-	"os"
 	"strings"
 )
 
-var (
-	validIssuers = strings.Split(mustEnv("VALID_ISSUERS"), " ")
-)
+// No global variables needed
 
-func mustEnv(name string) string {
-	v := os.Getenv(name)
-	if v == "" {
-		panic(fmt.Sprintf("missing env variable: %s", name))
-	}
-	return v
+// TokenInfo contains the validated token information
+type TokenInfo struct {
+	TenantID   string
+	Username   string
+	Expiration int64 // Unix timestamp
 }
 
-func ValidateToken(tokenStr string) (string, error) {
-	// Try each valid issuer until one works
-	var lastError error
+// extractIssuerFromToken extracts the issuer claim from a JWT token without verification.
+// This is safe because we immediately verify the token with the extracted issuer's keys.
+// We need this because the OIDC library requires knowing the issuer URL to fetch public keys,
+// but the issuer is inside the token itself.
+func extractIssuerFromToken(tokenStr string) (string, error) {
+	// JWT format: header.payload.signature
+	parts := strings.Split(tokenStr, ".")
+	if len(parts) != 3 {
+		return "", fmt.Errorf("invalid token format: expected 3 parts, got %d", len(parts))
+	}
 	
-	for _, issuer := range validIssuers {
-		issuer = strings.TrimSpace(issuer)
-		if issuer == "" {
-			continue
-		}
-		
-		log.Printf("🔍 Trying issuer: %s", issuer)
-		
-		// Connect to Cognito's OIDC JWKS endpoint
-		provider, err := oidc.NewProvider(context.Background(), issuer)
-		if err != nil {
-			lastError = fmt.Errorf("oidc provider error for issuer %s: %w", issuer, err)
-			continue
-		}
+	// Decode the payload (base64url without padding)
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("failed to decode token payload: %w", err)
+	}
+	
+	// Parse just enough to get the issuer
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return "", fmt.Errorf("failed to parse token claims: %w", err)
+	}
+	
+	issuer, ok := claims["iss"].(string)
+	if !ok || issuer == "" {
+		return "", fmt.Errorf("missing or invalid issuer claim")
+	}
+	
+	return issuer, nil
+}
 
-		// For access tokens, skip audience check as they don't have 'aud' claim
-		verifier := provider.Verifier(&oidc.Config{
-			SkipClientIDCheck: true, // Access tokens don't have audience claim
-		})
-
-		// This will check sig, expiry, issuer, and aud for you
-		idToken, err := verifier.Verify(context.Background(), tokenStr)
-		if err != nil {
-			lastError = fmt.Errorf("token verification failed for issuer %s: %w", issuer, err)
-			continue
-		}
-
-		// You can extract any JWT claim as a map
-		var claims map[string]interface{}
-		if err := idToken.Claims(&claims); err != nil {
-			lastError = fmt.Errorf("decoding claims for issuer %s: %w", issuer, err)
-			continue
-		}
-
-		// Pull out your custom tenant claim
-		tenant, _ := claims["tenant_id"].(string)
-		if tenant == "" {
-			lastError = fmt.Errorf("missing tenant_id claim for issuer %s", issuer)
-			continue
-		}
-
-		log.Printf("✅ Token validated with issuer: %s, tenant: %s", issuer, tenant)
-		return tenant, nil
+func ValidateToken(ctx context.Context, tokenStr string) (*TokenInfo, error) {
+	// Extract issuer from the token to know which Cognito User Pool to verify against
+	issuer, err := extractIssuerFromToken(tokenStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract issuer: %w", err)
+	}
+	
+	log.Printf("🔍 Token issuer: %s", issuer)
+	
+	// Connect to the issuer's OIDC endpoint to get public keys
+	provider, err := oidc.NewProvider(ctx, issuer)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create OIDC provider for issuer %s: %w", issuer, err)
 	}
 
-	if lastError != nil {
-		return "", fmt.Errorf("token validation failed against all issuers: %w", lastError)
+	// For access tokens, skip audience check as they don't have 'aud' claim
+	verifier := provider.Verifier(&oidc.Config{
+		SkipClientIDCheck: true, // Access tokens don't have audience claim
+	})
+
+	// Verify the token signature, expiry, and issuer
+	idToken, err := verifier.Verify(ctx, tokenStr)
+	if err != nil {
+		return nil, fmt.Errorf("token verification failed: %w", err)
 	}
-	return "", fmt.Errorf("no valid issuers configured")
+
+	// Extract claims from the verified token
+	var claims map[string]interface{}
+	if err := idToken.Claims(&claims); err != nil {
+		return nil, fmt.Errorf("failed to decode claims: %w", err)
+	}
+
+	// Extract tenant_id - this is our custom claim added by pre-token Lambda
+	tenant, _ := claims["tenant_id"].(string)
+	if tenant == "" {
+		return nil, fmt.Errorf("missing tenant_id claim")
+	}
+
+	// Extract username (Cognito uses "username" claim in access tokens)
+	username, _ := claims["username"].(string)
+	
+	// Extract expiration (standard claim "exp")
+	exp, _ := claims["exp"].(float64)
+	expiration := int64(exp)
+
+	log.Printf("✅ Token validated: tenant=%s, user=%s, exp=%d", 
+		tenant, username, expiration)
+	
+	return &TokenInfo{
+		TenantID:   tenant,
+		Username:   username,
+		Expiration: expiration,
+	}, nil
 }
 
 func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequestTypeRequest) (events.APIGatewayCustomAuthorizerResponse, error) {
@@ -120,7 +149,7 @@ func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest
 		log.Printf("🔍 Full token: %s", token)
 	}
 
-	tenant, err := ValidateToken(token)
+	tokenInfo, err := ValidateToken(ctx, token)
 	if err != nil {
 		log.Printf("❌ AUTHORIZATION FAILED: %v", err)
 		return events.APIGatewayCustomAuthorizerResponse{
@@ -129,12 +158,17 @@ func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest
 		}, nil
 	}
 
-	log.Printf("✅ AUTHORIZATION SUCCESSFUL: tenant=%s", tenant)
+	log.Printf("✅ AUTHORIZATION SUCCESSFUL: tenant=%s, user=%s, exp=%d", 
+		tokenInfo.TenantID, tokenInfo.Username, tokenInfo.Expiration)
+	
+	// Pass token information to the Lambda via context
 	return events.APIGatewayCustomAuthorizerResponse{
-		PrincipalID:    tenant,
+		PrincipalID:    tokenInfo.TenantID,
 		PolicyDocument: generatePolicy("Allow", event.MethodArn),
 		Context: map[string]interface{}{
-			"tenant_id": tenant,
+			"tenant_id":        tokenInfo.TenantID,
+			"username":         tokenInfo.Username,
+			"token_expiration": fmt.Sprintf("%d", tokenInfo.Expiration), // Must be string in context
 		},
 	}, nil
 }

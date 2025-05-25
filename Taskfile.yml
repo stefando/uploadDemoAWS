@@ -83,21 +83,207 @@ tasks:
     cmds:
       - sam delete --stack-name {{.STACK_NAME}} --profile {{.AWS_PROFILE}} --region {{.AWS_REGION}} --no-prompts
 
-  # Get Cognito user pool information for testing
-  info:
-    desc: Display Cognito User Pool and Client information
+  # Add a new tenant to the system
+  tenant-add:
+    desc: Add a new tenant with User Pool and DynamoDB mapping
+    vars:
+      TENANT_ID: '{{.TENANT_ID | default ""}}'
     cmds:
-      - aws cognito-idp list-user-pools --max-items 10 --profile {{.AWS_PROFILE}} --query "UserPools[?Name=='upload-demo-user-pool']"
-      - aws cognito-idp list-user-pool-clients --user-pool-id $(aws cognito-idp list-user-pools --max-items 10 --profile {{.AWS_PROFILE}} --query "UserPools[?Name=='upload-demo-user-pool'].Id" --output text) --profile {{.AWS_PROFILE}}
-
-  # Create test users (run after deployment)
-  create-users:
-    desc: Create test users in Cognito User Pool
-    cmds:
-      - echo "Creating test users in Cognito User Pool..."
       - |
-        USER_POOL_ID=$(aws cognito-idp list-user-pools --max-items 10 --profile {{.AWS_PROFILE}} --query "UserPools[?Name=='upload-demo-user-pool'].Id" --output text)
-        aws cognito-idp admin-create-user --user-pool-id $USER_POOL_ID --username user-tenant-a --message-action SUPPRESS --temporary-password TempPass123! --profile {{.AWS_PROFILE}}
-        aws cognito-idp admin-create-user --user-pool-id $USER_POOL_ID --username user-tenant-b --message-action SUPPRESS --temporary-password TempPass123! --profile {{.AWS_PROFILE}}
-        aws cognito-idp admin-set-user-password --user-pool-id $USER_POOL_ID --username user-tenant-a --password TestPass123! --permanent --profile {{.AWS_PROFILE}}
-        aws cognito-idp admin-set-user-password --user-pool-id $USER_POOL_ID --username user-tenant-b --password TestPass123! --permanent --profile {{.AWS_PROFILE}}
+        if [ -z "{{.TENANT_ID}}" ]; then
+          echo "Error: TENANT_ID is required. Usage: task tenant-add TENANT_ID=tenant-name"
+          exit 1
+        fi
+      - echo "Adding new tenant {{.TENANT_ID}}..."
+      
+      # Get stack outputs
+      - |
+        TABLE_NAME=$(aws cloudformation describe-stacks --stack-name {{.STACK_NAME}} --profile {{.AWS_PROFILE}} --region {{.AWS_REGION}} --query "Stacks[0].Outputs[?OutputKey=='UserPoolTenantMappingTable'].OutputValue" --output text)
+        PRETOKEN_LAMBDA_ARN=$(aws cloudformation describe-stacks --stack-name {{.STACK_NAME}} --profile {{.AWS_PROFILE}} --region {{.AWS_REGION}} --query "Stacks[0].Outputs[?OutputKey=='PreTokenLambdaArn'].OutputValue" --output text)
+      
+      # Create User Pool
+      - |
+        echo "Creating User Pool for {{.TENANT_ID}}..."
+        USER_POOL_NAME="{{.STACK_NAME}}-{{.TENANT_ID}}-user-pool"
+        
+        USER_POOL_ID=$(aws cognito-idp create-user-pool \
+          --pool-name "$USER_POOL_NAME" \
+          --policies "PasswordPolicy={MinimumLength=8,RequireUppercase=true,RequireLowercase=true,RequireNumbers=true,RequireSymbols=true}" \
+          --lambda-config "PreTokenGenerationConfig={LambdaTriggerVersion=V2_0,LambdaArn=$PRETOKEN_LAMBDA_ARN}" \
+          --profile {{.AWS_PROFILE}} \
+          --region {{.AWS_REGION}} \
+          --query "UserPool.Id" \
+          --output text)
+        
+        echo "Created User Pool: $USER_POOL_ID"
+      
+      # Create User Pool Client
+      - |
+        echo "Creating User Pool Client..."
+        CLIENT_ID=$(aws cognito-idp create-user-pool-client \
+          --user-pool-id "$USER_POOL_ID" \
+          --client-name "{{.TENANT_ID}}-client" \
+          --explicit-auth-flows ALLOW_USER_PASSWORD_AUTH ALLOW_REFRESH_TOKEN_AUTH \
+          --generate-secret false \
+          --profile {{.AWS_PROFILE}} \
+          --region {{.AWS_REGION}} \
+          --query "UserPoolClient.ClientId" \
+          --output text)
+        
+        echo "Created User Pool Client: $CLIENT_ID"
+      
+      # Add DynamoDB mapping
+      - |
+        echo "Adding DynamoDB mapping..."
+        aws dynamodb put-item \
+          --table-name "$TABLE_NAME" \
+          --item "{\"pool_id\": {\"S\": \"$USER_POOL_ID\"}, \"tenant_id\": {\"S\": \"{{.TENANT_ID}}\"}}" \
+          --profile {{.AWS_PROFILE}} \
+          --region {{.AWS_REGION}}
+      
+      # Grant Lambda permission to be invoked by Cognito
+      - |
+        echo "Granting Lambda permission for Cognito trigger..."
+        aws lambda add-permission \
+          --function-name "$PRETOKEN_LAMBDA_ARN" \
+          --statement-id "CognitoTrigger-{{.TENANT_ID}}-$(date +%s)" \
+          --action lambda:InvokeFunction \
+          --principal cognito-idp.amazonaws.com \
+          --source-arn "arn:aws:cognito-idp:{{.AWS_REGION}}:$(aws sts get-caller-identity --profile {{.AWS_PROFILE}} --query Account --output text):userpool/$USER_POOL_ID" \
+          --profile {{.AWS_PROFILE}} \
+          --region {{.AWS_REGION}} || true
+      
+      - echo "✅ Tenant {{.TENANT_ID}} created successfully!"
+      - echo "User Pool ID: $USER_POOL_ID"
+      - echo "Client ID: $CLIENT_ID"
+      - echo "Run 'task user-add TENANT_ID={{.TENANT_ID}} USERNAME=<username>' to add users"
+
+  # Add a user to a tenant
+  user-add:
+    desc: Add a user to a specific tenant
+    vars:
+      TENANT_ID: '{{.TENANT_ID | default ""}}'
+      USERNAME: '{{.USERNAME | default ""}}'
+      EMAIL: '{{.EMAIL | default ""}}'
+      PASSWORD: '{{.PASSWORD | default "TestPass123!"}}'
+    cmds:
+      - |
+        if [ -z "{{.TENANT_ID}}" ] || [ -z "{{.USERNAME}}" ]; then
+          echo "Error: TENANT_ID and USERNAME are required"
+          echo "Usage: task user-add TENANT_ID=tenant-name USERNAME=john [EMAIL=john@example.com] [PASSWORD=TestPass123!]"
+          exit 1
+        fi
+      
+      # Find User Pool ID by naming convention
+      - |
+        USER_POOL_NAME="{{.STACK_NAME}}-{{.TENANT_ID}}-user-pool"
+        USER_POOL_ID=$(aws cognito-idp list-user-pools --max-results 60 --profile {{.AWS_PROFILE}} --region {{.AWS_REGION}} --query "UserPools[?Name=='$USER_POOL_NAME'].Id" --output text)
+        
+        if [ -z "$USER_POOL_ID" ]; then
+          echo "Error: User Pool not found for tenant {{.TENANT_ID}}"
+          echo "Expected pool name: $USER_POOL_NAME"
+          exit 1
+        fi
+      
+      # Set email if not provided
+      - |
+        if [ -z "{{.EMAIL}}" ]; then
+          EMAIL="{{.USERNAME}}@{{.TENANT_ID}}.com"
+        else
+          EMAIL="{{.EMAIL}}"
+        fi
+      
+      # Create user
+      - |
+        echo "Creating user {{.USERNAME}} in tenant {{.TENANT_ID}}..."
+        aws cognito-idp admin-create-user \
+          --user-pool-id "$USER_POOL_ID" \
+          --username "{{.USERNAME}}" \
+          --user-attributes Name=email,Value="$EMAIL" \
+          --message-action SUPPRESS \
+          --temporary-password "TempPass123!" \
+          --profile {{.AWS_PROFILE}} \
+          --region {{.AWS_REGION}}
+        
+        aws cognito-idp admin-set-user-password \
+          --user-pool-id "$USER_POOL_ID" \
+          --username "{{.USERNAME}}" \
+          --password "{{.PASSWORD}}" \
+          --permanent \
+          --profile {{.AWS_PROFILE}} \
+          --region {{.AWS_REGION}}
+      
+      - echo "✅ User {{.USERNAME}} created successfully!"
+      - echo "Email: $EMAIL"
+      - echo "Password: {{.PASSWORD}}"
+
+  # List all tenants
+  tenant-list:
+    desc: List all configured tenants
+    cmds:
+      - |
+        TABLE_NAME=$(aws cloudformation describe-stacks --stack-name {{.STACK_NAME}} --profile {{.AWS_PROFILE}} --region {{.AWS_REGION}} --query "Stacks[0].Outputs[?OutputKey=='UserPoolTenantMappingTable'].OutputValue" --output text)
+        echo "Configured tenants:"
+        aws dynamodb scan --table-name "$TABLE_NAME" --profile {{.AWS_PROFILE}} --region {{.AWS_REGION}} --query "Items[*].[tenant_id.S, pool_id.S]" --output table
+
+  # Remove a tenant from the system
+  tenant-remove:
+    desc: Remove a tenant (User Pool, DynamoDB mapping, and optionally S3 data)
+    vars:
+      TENANT_ID: '{{.TENANT_ID | default ""}}'
+      DELETE_S3: '{{.DELETE_S3 | default "false"}}'
+    cmds:
+      - |
+        if [ -z "{{.TENANT_ID}}" ]; then
+          echo "Error: TENANT_ID is required. Usage: task tenant-remove TENANT_ID=tenant-name [DELETE_S3=true]"
+          exit 1
+        fi
+      - echo "⚠️  WARNING: This will permanently delete tenant {{.TENANT_ID}}"
+      - echo "Press Ctrl+C to cancel, or wait 5 seconds to continue..."
+      - sleep 5
+      
+      # Get stack outputs
+      - |
+        TABLE_NAME=$(aws cloudformation describe-stacks --stack-name {{.STACK_NAME}} --profile {{.AWS_PROFILE}} --region {{.AWS_REGION}} --query "Stacks[0].Outputs[?OutputKey=='UserPoolTenantMappingTable'].OutputValue" --output text)
+        S3_BUCKET=$(aws cloudformation describe-stacks --stack-name {{.STACK_NAME}} --profile {{.AWS_PROFILE}} --region {{.AWS_REGION}} --query "Stacks[0].Outputs[?OutputKey=='SharedStorageBucket'].OutputValue" --output text)
+      
+      # Find User Pool ID by naming convention
+      - |
+        USER_POOL_NAME="{{.STACK_NAME}}-{{.TENANT_ID}}-user-pool"
+        USER_POOL_ID=$(aws cognito-idp list-user-pools --max-results 60 --profile {{.AWS_PROFILE}} --region {{.AWS_REGION}} --query "UserPools[?Name=='$USER_POOL_NAME'].Id" --output text)
+        
+        if [ -z "$USER_POOL_ID" ]; then
+          echo "Error: User Pool not found for tenant {{.TENANT_ID}}"
+          echo "Expected pool name: $USER_POOL_NAME"
+          exit 1
+        fi
+        
+        echo "Found User Pool: $USER_POOL_ID"
+      
+      # Delete DynamoDB mapping
+      - |
+        echo "Removing DynamoDB mapping..."
+        aws dynamodb delete-item \
+          --table-name "$TABLE_NAME" \
+          --key "{\"pool_id\": {\"S\": \"$USER_POOL_ID\"}}" \
+          --profile {{.AWS_PROFILE}} \
+          --region {{.AWS_REGION}}
+      
+      # Delete User Pool (this also deletes all users and clients)
+      - |
+        echo "Deleting User Pool..."
+        aws cognito-idp delete-user-pool \
+          --user-pool-id "$USER_POOL_ID" \
+          --profile {{.AWS_PROFILE}} \
+          --region {{.AWS_REGION}}
+      
+      # Delete S3 data if requested
+      - |
+        if [ "{{.DELETE_S3}}" = "true" ]; then
+          echo "Deleting S3 data for tenant {{.TENANT_ID}}..."
+          aws s3 rm "s3://$S3_BUCKET/{{.TENANT_ID}}/" --recursive --profile {{.AWS_PROFILE}} --region {{.AWS_REGION}} || true
+        else
+          echo "Keeping S3 data (use DELETE_S3=true to remove)"
+        fi
+      
+      - echo "✅ Tenant {{.TENANT_ID}} removed successfully!"

@@ -247,17 +247,27 @@ func lambdaHandler(ctx context.Context, req events.APIGatewayProxyRequest) (even
 		}, nil
 	}
 
-	// Extract tenant ID from API Gateway REQUEST authorizer context
+	// Extract tenant ID and token expiration from API Gateway REQUEST authorizer context
 	if req.RequestContext.Authorizer != nil {
 		// For REQUEST authorizers, context is directly in Authorizer map
+		ctx = httpReq.Context()
+		
 		if tenantID, exists := req.RequestContext.Authorizer["tenant_id"].(string); exists && tenantID != "" {
-			// Add tenant ID directly to request context
-			ctx = auth.WithTenantID(httpReq.Context(), tenantID)
-			httpReq = httpReq.WithContext(ctx)
+			// Add tenant ID to request context
+			ctx = auth.WithTenantID(ctx, tenantID)
 			log.Printf("Tenant ID from REQUEST authorizer context: %s", tenantID)
 		} else {
 			log.Printf("No tenant_id found in authorizer context: %+v", req.RequestContext.Authorizer)
 		}
+		
+		// Extract token expiration
+		if tokenExp, exists := req.RequestContext.Authorizer["token_expiration"].(float64); exists {
+			// Convert float64 to int64 (API Gateway converts numbers to float64)
+			ctx = auth.WithTokenExpiration(ctx, int64(tokenExp))
+			log.Printf("Token expiration from REQUEST authorizer context: %d", int64(tokenExp))
+		}
+		
+		httpReq = httpReq.WithContext(ctx)
 	}
 
 	// Create a response recorder to capture Chi's response

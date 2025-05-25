@@ -30,156 +30,44 @@ Parameters:
 
 Resources:
   # ================================================
-  # COGNITO USER POOLS - Multi-tenant Authentication
+  # DYNAMODB TABLE - User Pool to Tenant Mapping
   # ================================================
-  # Separate user pools for each tenant following naming convention
-  
-  # User Pool for Tenant A
-  UserPoolTenantA:
-    Type: AWS::Cognito::UserPool
+  # Maps Cognito User Pool IDs to tenant IDs for the pre-token Lambda
+  UserPoolTenantMappingTable:
+    Type: AWS::DynamoDB::Table
     Properties:
-      UserPoolName: !Sub "${AWS::StackName}-tenant-a-user-pool"
-      # Password policy for security
-      Policies:
-        PasswordPolicy:
-          MinimumLength: 8
-          RequireUppercase: true
-          RequireLowercase: true
-          RequireNumbers: true
-          RequireSymbols: false
-      # Auto-verify email addresses (for production, you'd want email verification)
-      AutoVerifiedAttributes:
-        - email
-      # Schema defines what user attributes we collect
-      Schema:
-        - Name: email
-          AttributeDataType: String
-          Required: true
-          Mutable: true
-      # Lambda triggers for adding custom claims to JWT (V2_0 enables access token customization)
-      LambdaConfig:
-        PreTokenGenerationConfig:
-          LambdaArn: !GetAtt PreTokenGenerationLambdaTenantA.Arn
-          LambdaVersion: "V2_0"
-
-  # User Pool Client for Tenant A
-  UserPoolClientTenantA:
-    Type: AWS::Cognito::UserPoolClient
-    Properties:
-      UserPoolId: !Ref UserPoolTenantA
-      ClientName: !Sub "${AWS::StackName}-tenant-a-client"
-      # Explicit auth flows - these determine how clients can authenticate
-      ExplicitAuthFlows:
-        - ADMIN_NO_SRP_AUTH  # Allow admin-initiated auth (for testing)
-        - USER_PASSWORD_AUTH # Allow username/password auth
-      # Token validity periods
-      AccessTokenValidity: 1  # 1 hour
-      IdTokenValidity: 1      # 1 hour
-      RefreshTokenValidity: 30 # 30 days
-      TokenValidityUnits:
-        AccessToken: hours
-        IdToken: hours
-        RefreshToken: days
-        
-  # User Pool for Tenant B
-  UserPoolTenantB:
-    Type: AWS::Cognito::UserPool
-    Properties:
-      UserPoolName: !Sub "${AWS::StackName}-tenant-b-user-pool"
-      # Password policy for security
-      Policies:
-        PasswordPolicy:
-          MinimumLength: 8
-          RequireUppercase: true
-          RequireLowercase: true
-          RequireNumbers: true
-          RequireSymbols: false
-      # Auto-verify email addresses (for production, you'd want email verification)
-      AutoVerifiedAttributes:
-        - email
-      # Schema defines what user attributes we collect
-      Schema:
-        - Name: email
-          AttributeDataType: String
-          Required: true
-          Mutable: true
-      # Lambda triggers for adding custom claims to JWT (V2_0 enables access token customization)
-      LambdaConfig:
-        PreTokenGenerationConfig:
-          LambdaArn: !GetAtt PreTokenGenerationLambdaTenantB.Arn
-          LambdaVersion: "V2_0"
-
-  # User Pool Client for Tenant B
-  UserPoolClientTenantB:
-    Type: AWS::Cognito::UserPoolClient
-    Properties:
-      UserPoolId: !Ref UserPoolTenantB
-      ClientName: !Sub "${AWS::StackName}-tenant-b-client"
-      # Explicit auth flows - these determine how clients can authenticate
-      ExplicitAuthFlows:
-        - ADMIN_NO_SRP_AUTH  # Allow admin-initiated auth (for testing)
-        - USER_PASSWORD_AUTH # Allow username/password auth
-      # Token validity periods
-      AccessTokenValidity: 1  # 1 hour
-      IdTokenValidity: 1      # 1 hour
-      RefreshTokenValidity: 30 # 30 days
-      TokenValidityUnits:
-        AccessToken: hours
-        IdToken: hours
-        RefreshToken: days
+      TableName: !Sub "${AWS::StackName}-pool-tenant-mapping"
+      BillingMode: PAY_PER_REQUEST  # On-demand billing for demo
+      AttributeDefinitions:
+        - AttributeName: pool_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pool_id
+          KeyType: HASH
+      Tags:
+        - Key: Purpose
+          Value: Maps User Pool IDs to Tenant IDs
 
   # ================================================
   # LAMBDA FOR CUSTOM JWT CLAIMS
   # ================================================
-  # Separate pre-token Lambdas for each tenant to add tenant_id claim
+  # Single pre-token Lambda that looks up tenant ID from DynamoDB
   
-  # Pre-token Lambda for Tenant A
-  PreTokenGenerationLambdaTenantA:
+  PreTokenGenerationLambda:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub "${AWS::StackName}-pre-token-tenant-a"
+      FunctionName: !Sub "${AWS::StackName}-pre-token"
       CodeUri: .aws-sam/build/PreTokenGenerationLambda/function.zip
       Handler: bootstrap
       Runtime: provided.al2023
       Environment:
         Variables:
           LOG_LEVEL: INFO
-          TENANT_ID: tenant-a
-      # Lambda is associated with Cognito via LambdaConfig, not through Events
-      # SAM doesn't support Cognito triggers via the Events property
-
-  # Permission for Cognito to invoke the pre-token Lambda for Tenant A
-  PreTokenGenerationLambdaPermissionTenantA:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref PreTokenGenerationLambdaTenantA
-      Action: lambda:InvokeFunction
-      Principal: cognito-idp.amazonaws.com
-      SourceArn: !GetAtt UserPoolTenantA.Arn
-      
-  # Pre-token Lambda for Tenant B
-  PreTokenGenerationLambdaTenantB:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub "${AWS::StackName}-pre-token-tenant-b"
-      CodeUri: .aws-sam/build/PreTokenGenerationLambda/function.zip
-      Handler: bootstrap
-      Runtime: provided.al2023
-      Environment:
-        Variables:
-          LOG_LEVEL: INFO
-          TENANT_ID: tenant-b
-      # Lambda is associated with Cognito via LambdaConfig, not through Events
-      # SAM doesn't support Cognito triggers via the Events property
-
-  # Permission for Cognito to invoke the pre-token Lambda for Tenant B
-  PreTokenGenerationLambdaPermissionTenantB:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref PreTokenGenerationLambdaTenantB
-      Action: lambda:InvokeFunction
-      Principal: cognito-idp.amazonaws.com
-      SourceArn: !GetAtt UserPoolTenantB.Arn
+          TABLE_NAME: !Ref UserPoolTenantMappingTable
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref UserPoolTenantMappingTable
+      # Lambda is associated with Cognito via LambdaConfig during tenant setup
 
   # Permission for API Gateway to invoke the tenant authorizer Lambda
   TenantAuthorizerLambdaPermission:
@@ -217,6 +105,7 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub "${AWS::StackName}-tenant-access-role"
+      MaxSessionDuration: 10800  # 3 hours to support presigned URLs with 2+ hours validity
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -406,9 +295,7 @@ Resources:
               Action:
                 - cognito-idp:InitiateAuth
                 - cognito-idp:RespondToAuthChallenge
-              Resource: 
-                - !GetAtt UserPoolTenantA.Arn
-                - !GetAtt UserPoolTenantB.Arn
+              Resource: "*"  # Allow authentication against any user pool (filtered by name in code)
             - Effect: Allow
               Action:
                 - cognito-idp:ListUserPools
@@ -439,8 +326,7 @@ Resources:
       Environment:
         Variables:
           LOG_LEVEL: INFO
-          # Space-separated list of valid issuers (user pool URLs)
-          VALID_ISSUERS: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPoolTenantA} https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPoolTenantB}"
+          REGION: !Ref AWS::Region
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -492,7 +378,7 @@ Resources:
           TenantVerificationAuthorizer:
             FunctionPayloadType: REQUEST
             FunctionArn: !GetAtt TenantAuthorizerFunction.Arn
-            AuthorizerResultTtlInSeconds: 0
+            AuthorizerResultTtlInSeconds: 300  # 5 minutes cache for performance
             Identity:
               Headers:
                 - Authorization
@@ -535,32 +421,20 @@ Outputs:
     Export:
       Name: !Sub "${AWS::StackName}-api-url"
 
-  UserPoolIdTenantA:
-    Description: Cognito User Pool ID for Tenant A
-    Value: !Ref UserPoolTenantA
-    Export:
-      Name: !Sub "${AWS::StackName}-user-pool-id-tenant-a"
-
-  UserPoolClientIdTenantA:
-    Description: Cognito User Pool Client ID for Tenant A
-    Value: !Ref UserPoolClientTenantA
-    Export:
-      Name: !Sub "${AWS::StackName}-user-pool-client-id-tenant-a"
-      
-  UserPoolIdTenantB:
-    Description: Cognito User Pool ID for Tenant B
-    Value: !Ref UserPoolTenantB
-    Export:
-      Name: !Sub "${AWS::StackName}-user-pool-id-tenant-b"
-
-  UserPoolClientIdTenantB:
-    Description: Cognito User Pool Client ID for Tenant B
-    Value: !Ref UserPoolClientTenantB
-    Export:
-      Name: !Sub "${AWS::StackName}-user-pool-client-id-tenant-b"
-
   SharedStorageBucket:
     Description: Shared S3 bucket for all tenants
     Value: !Ref SharedStorageBucket
     Export:
       Name: !Sub "${AWS::StackName}-shared-bucket"
+      
+  UserPoolTenantMappingTable:
+    Description: DynamoDB table for user pool to tenant mapping
+    Value: !Ref UserPoolTenantMappingTable
+    Export:
+      Name: !Sub "${AWS::StackName}-pool-tenant-mapping-table"
+      
+  PreTokenLambdaArn:
+    Description: ARN of the pre-token generation Lambda
+    Value: !GetAtt PreTokenGenerationLambda.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-pre-token-lambda-arn"
