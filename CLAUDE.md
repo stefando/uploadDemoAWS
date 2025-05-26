@@ -51,6 +51,8 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
 
 ### Task Automation (using Taskfile.dev)
 - Deploy stack: `task deploy`
+  - Automatically includes git commit hash in deployment for tracking
+  - View deployed version: `aws cloudformation describe-stacks --stack-name upload-demo-stack --query "Stacks[0].Outputs[?OutputKey=='DeployedGitCommit'].OutputValue" --output text`
 - Build Lambda: `task build`
 - Test locally: `task test`
 - Clean artifacts: `task clean`
@@ -72,6 +74,14 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
 - Format code: `go fmt ./...`
 - Static analysis: `go vet ./...`
 - Tidy modules: `go mod tidy`
+
+## Deployment Tracking
+
+The stack includes git commit tracking to identify which version of code is deployed:
+- **Automatic Capture**: `task deploy` automatically captures the current git commit hash
+- **CloudFormation Parameter**: Stored as `GitCommit` parameter in the stack
+- **Stack Output**: Available as `DeployedGitCommit` in CloudFormation outputs
+- **Query Command**: `aws cloudformation describe-stacks --stack-name upload-demo-stack --profile personal --query "Stacks[0].Outputs[?OutputKey=='DeployedGitCommit'].OutputValue" --output text`
 
 ## Architecture Details
 

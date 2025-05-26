@@ -27,6 +27,11 @@ Parameters:
     Type: String
     Description: ID of the Route53 hosted zone for the domain
     Default: ''
+  
+  GitCommit:
+    Type: String
+    Description: Git commit hash for deployment tracking
+    Default: 'unknown'
 
 Resources:
   # ================================================
@@ -438,3 +443,7 @@ Outputs:
     Value: !GetAtt PreTokenGenerationLambda.Arn
     Export:
       Name: !Sub "${AWS::StackName}-pre-token-lambda-arn"
+  
+  DeployedGitCommit:
+    Description: Git commit hash of the deployed code
+    Value: !Ref GitCommit
