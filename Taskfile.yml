@@ -44,7 +44,7 @@ tasks:
         sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
     cmds:
       - task: sam-package
-      - sam deploy --template-file packaged.yaml --stack-name {{.STACK_NAME}} --profile {{.AWS_PROFILE}} --capabilities CAPABILITY_NAMED_IAM --region {{.AWS_REGION}} --no-fail-on-empty-changeset --parameter-overrides GitCommit={{.GIT_COMMIT}}
+      - sam deploy --template-file packaged.yaml --stack-name {{.STACK_NAME}} --profile {{.AWS_PROFILE}} --capabilities CAPABILITY_IAM --region {{.AWS_REGION}} --no-fail-on-empty-changeset --parameter-overrides GitCommit={{.GIT_COMMIT}}
 
   # Start local API for testing
   local:

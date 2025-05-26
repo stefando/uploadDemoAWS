@@ -111,16 +111,13 @@ Resources:
   TenantAccessRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${AWS::StackName}-tenant-access-role"
       MaxSessionDuration: 10800  # 3 hours to support presigned URLs with 2+ hours validity
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
-              # Using explicit ARN with role name to avoid circular dependency
-              # (can't use !GetAtt LambdaExecutionRole.Arn here)
-              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-lambda-execution-role"
+              AWS: !GetAtt LambdaExecutionRole.Arn
             Action: 
               - sts:AssumeRole
               - sts:TagSession
@@ -183,8 +180,6 @@ Resources:
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      # Explicit name is required to break circular dependency with TenantAccessRole
-      RoleName: !Sub "${AWS::StackName}-lambda-execution-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -195,17 +190,22 @@ Resources:
       ManagedPolicyArns:
         # Basic Lambda execution permissions (CloudWatch Logs)
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        # Allow Lambda to assume the tenant access role
-        - PolicyName: AssumeRolePolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action: 
-                  - sts:AssumeRole
-                  - sts:TagSession
-                Resource: !GetAtt TenantAccessRole.Arn
+
+  # Separate policy to avoid circular dependency
+  LambdaAssumeRolePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: AssumeRolePolicy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: 
+              - sts:AssumeRole
+              - sts:TagSession
+            Resource: !GetAtt TenantAccessRole.Arn
+      Roles:
+        - !Ref LambdaExecutionRole
 
   # ================================================
   # MAIN LAMBDA FUNCTION - File Upload API
