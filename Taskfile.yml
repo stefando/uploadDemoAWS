@@ -12,11 +12,11 @@ vars:
   BUILD_DIR: .aws-sam/build
 
 tasks:
-  # Build all Lambda function binaries for Linux
+  # Build all Lambda functions using SAM
   build:
-    desc: Build all Go Lambda functions for Linux ARM64
+    desc: Build all Go Lambda functions using SAM build
     cmds:
-      - ./build.sh
+      - sam build --profile {{.AWS_PROFILE}} --region {{.AWS_REGION}}
     sources:
       - "cmd/lambda/**/*.go"
       - "cmd/login/**/*.go"
@@ -25,18 +25,13 @@ tasks:
       - "lambda/authorizer/**/*.go"
       - go.mod
       - go.sum
-      - build.sh
-    generates:
-      - ".aws-sam/build/UploadFunction/function.zip"
-      - ".aws-sam/build/LoginFunction/function.zip"
-      - ".aws-sam/build/PreTokenGenerationLambda/function.zip"
-      - ".aws-sam/build/TenantAuthorizerFunction/function.zip"
+      - template.yaml
 
-  # Package pre-built functions and prepare for deployment
+  # Build and package functions for deployment
   sam-package:
-    desc: Package SAM application with pre-built binaries
+    desc: Build and package SAM application
     cmds:
-      # First build Go binaries with our script
+      # Build using SAM
       - task: build
       # Use SAM package command to create deployment package
       - sam package --s3-bucket aws-sam-cli-managed-default-samclisourcebucket-gjzdgbfvwjgj --output-template-file packaged.yaml --profile {{.AWS_PROFILE}} --region {{.AWS_REGION}}
@@ -55,7 +50,7 @@ tasks:
   local:
     desc: Start local API Gateway for testing
     cmds:
-      - task: sam-build
+      - task: build
       - sam local start-api --profile {{.AWS_PROFILE}}
 
   # Run Go tests

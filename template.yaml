@@ -60,9 +60,11 @@ Resources:
   
   PreTokenGenerationLambda:
     Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
     Properties:
       FunctionName: !Sub "${AWS::StackName}-pre-token"
-      CodeUri: .aws-sam/build/PreTokenGenerationLambda/function.zip
+      CodeUri: lambda/pre-token/
       Handler: bootstrap
       Runtime: provided.al2023
       Environment:
@@ -210,9 +212,11 @@ Resources:
   # ================================================
   UploadFunction:
     Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
     Properties:
       FunctionName: !Sub "${AWS::StackName}-upload-function"
-      CodeUri: .aws-sam/build/UploadFunction/function.zip
+      CodeUri: cmd/lambda/
       Handler: bootstrap
       Role: !GetAtt LambdaExecutionRole.Arn
       Environment:
@@ -282,9 +286,11 @@ Resources:
   # ================================================
   LoginFunction:
     Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
     Properties:
       FunctionName: !Sub "${AWS::StackName}-login"
-      CodeUri: .aws-sam/build/LoginFunction/function.zip
+      CodeUri: cmd/login/
       Handler: bootstrap
       Runtime: provided.al2023
       Timeout: 30
@@ -323,9 +329,11 @@ Resources:
   # This Lambda verifies tenant_id claim presence after Cognito validation
   TenantAuthorizerFunction:
     Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
     Properties:
       FunctionName: !Sub "${AWS::StackName}-tenant-authorizer"
-      CodeUri: .aws-sam/build/TenantAuthorizerFunction/function.zip
+      CodeUri: lambda/authorizer/
       Handler: bootstrap
       Runtime: provided.al2023
       Environment:
