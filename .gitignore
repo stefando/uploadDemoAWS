@@ -14,8 +14,11 @@ bootstrap
 *.cover
 coverage.out
 
-# Go module cache
-go.sum
+# Go workspace files
+/go.sum
+go.work.sum
+
+# Individual module go.sum files are tracked for reproducible builds
 
 # AWS SAM build artifacts
 .aws-sam/

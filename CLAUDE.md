@@ -14,10 +14,10 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
 
 ### Core Architecture
 - **AWS Lambda Functions:** Separate functions for different concerns:
-  - **Upload Lambda** (`cmd/lambda`): Handles all file operations (`/upload/*` endpoints)
-  - **Login Lambda** (`cmd/login`): Handles authentication (`/login` endpoint)
-  - **Authorizer Lambda** (`lambda/authorizer`): Validates JWT tokens for protected endpoints
-  - **Pre-token Lambda** (`lambda/pre-token`): Single shared Lambda that adds tenant claims to Cognito tokens
+  - **Upload Lambda** (`lambdas/api/upload`): Handles all file operations (`/upload/*` endpoints)
+  - **Login Lambda** (`lambdas/api/login`): Handles authentication (`/login` endpoint)
+  - **Authorizer Lambda** (`lambdas/cognito/authorizer`): Validates JWT tokens for protected endpoints
+  - **Pre-token Lambda** (`lambdas/cognito/pre-token`): Single shared Lambda that adds tenant claims to Cognito tokens
 - **API Endpoints:**
   - `/login` - Authenticate with tenant parameter and receive JWT tokens (no auth required)
   - `/upload` - Direct JSON upload (requires auth)
@@ -43,9 +43,35 @@ AWS Lambda-based multi-tenant file upload service written in Go. This is a pedag
 
 ### Deployment Strategy
 - Use `provided.al2023` runtime with compiled Go binary named `bootstrap`
+- Go workspaces with independent modules per Lambda function
 - CloudFormation template includes: Lambda, API Gateway, Cognito, S3 bucket, IAM roles
+- IAM roles use secure trust pattern avoiding circular dependencies
 - Single command deployment/teardown via SAM CLI
 - Custom domain integration with existing Route53 hosted zone
+
+### Go Workspaces Architecture
+- **Independent Modules:** Each Lambda function has its own `go.mod` file for dependency isolation
+- **Workspace Configuration:** Root `go.work` file manages all modules together
+- **Directory Structure:**
+  ```
+  lambdas/
+  ├── api/
+  │   ├── upload/     # Business logic Lambda (file operations)
+  │   └── login/      # Business logic Lambda (authentication)
+  └── cognito/
+      ├── authorizer/ # Infrastructure Lambda (JWT validation)
+      └── pre-token/  # Infrastructure Lambda (token enrichment)
+  ```
+- **Build Process:** SAM's `BuildMethod: go1.x` works with individual modules
+- **Dependency Management:** Each Lambda can have different dependencies without conflicts
+
+### IAM Security Architecture
+- **Clean Role Trust Pattern:** Avoids circular dependencies in CloudFormation
+- **LambdaExecutionRole:** Basic Lambda execution role (CloudWatch Logs)
+- **TenantAccessRole:** S3 access role that trusts specific LambdaExecutionRole
+- **LambdaAssumeRolePolicy:** Separate policy granting assume permissions
+- **Session Tagging:** Tenant isolation via AssumeRole with session tags
+- **Principle of Least Privilege:** Only specific Lambda role can assume tenant access role
 
 ## Development Commands
 
@@ -146,17 +172,21 @@ The stack includes git commit tracking to identify which version of code is depl
 
 ## AWS Resources Created
 - **Lambda Functions:**
-  - Upload Lambda with execution role
-  - Login Lambda with Cognito permissions
-  - Authorizer Lambda for JWT validation
-  - Single Pre-token Lambda (shared by all tenants)
+  - Upload Lambda (`lambdas/api/upload`) with execution role
+  - Login Lambda (`lambdas/api/login`) with Cognito permissions  
+  - Authorizer Lambda (`lambdas/cognito/authorizer`) for JWT validation
+  - Pre-token Lambda (`lambdas/cognito/pre-token`) shared by all tenants
+- **IAM Security:**
+  - LambdaExecutionRole: Basic Lambda execution (CloudWatch Logs)
+  - TenantAccessRole: S3 access with session tag restrictions
+  - LambdaAssumeRolePolicy: Separate policy avoiding circular dependencies
 - **API Gateway:** REST API with custom domain and REQUEST authorizer
 - **Cognito Resources:**
-  - Single Pre-token Lambda (shared by all User Pools)
+  - Pre-token Lambda (shared by all User Pools)
   - User Pools created per tenant via task commands (not in CloudFormation)
+  - DynamoDB table for User Pool → Tenant ID mapping
 - **Storage:** Single S3 bucket with tenant-prefixed paths
-- **IAM:** Roles and policies for tag-based tenant isolation
-- **DNS:** Route53 record for custom domain (using existing hosted zone)
+- **DNS:** Route53 record for custom domain and SSL certificate
 
 ## Multi-tenant Architecture Benefits
 
@@ -181,9 +211,12 @@ The stack includes git commit tracking to identify which version of code is depl
 
 ## Development Notes
 - Target audience: Senior engineers new to Go/AWS
+- Go workspaces enable independent Lambda modules without shared code
+- Each Lambda has isolated dependencies and can be developed independently
 - Comments focus on AWS concepts and Go Lambda patterns
 - Modern idiomatic Go with proper error handling
 - Chi router for HTTP routing (future expansion)
+- SAM BuildMethod: go1.x works with individual Go modules
 
 ## Demo and Testing Instructions
 

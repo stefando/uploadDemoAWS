@@ -18,13 +18,13 @@ tasks:
     cmds:
       - sam build --profile {{.AWS_PROFILE}} --region {{.AWS_REGION}}
     sources:
-      - "cmd/lambda/**/*.go"
-      - "cmd/login/**/*.go"
-      - "internal/**/*.go"
-      - "lambda/pre-token/**/*.go"
-      - "lambda/authorizer/**/*.go"
-      - go.mod
-      - go.sum
+      - "lambdas/api/upload/**/*.go"
+      - "lambdas/api/login/**/*.go"
+      - "lambdas/cognito/authorizer/**/*.go"
+      - "lambdas/cognito/pre-token/**/*.go"
+      - "go.work"
+      - "lambdas/*/go.mod"
+      - "lambdas/*/go.sum"
       - template.yaml
 
   # Build and package functions for deployment
@@ -44,7 +44,7 @@ tasks:
         sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
     cmds:
       - task: sam-package
-      - sam deploy --template-file packaged.yaml --stack-name {{.STACK_NAME}} --profile {{.AWS_PROFILE}} --capabilities CAPABILITY_IAM --region {{.AWS_REGION}} --no-fail-on-empty-changeset --parameter-overrides GitCommit={{.GIT_COMMIT}}
+      - sam deploy --template-file packaged.yaml --stack-name {{.STACK_NAME}} --profile {{.AWS_PROFILE}} --capabilities CAPABILITY_IAM --region {{.AWS_REGION}} --no-fail-on-empty-changeset --no-confirm-changeset --parameter-overrides GitCommit={{.GIT_COMMIT}}
 
   # Start local API for testing
   local:
