@@ -64,7 +64,7 @@ Resources:
       BuildMethod: go1.x
     Properties:
       FunctionName: !Sub "${AWS::StackName}-pre-token"
-      CodeUri: lambda/pre-token/
+      CodeUri: lambdas/cognito/pre-token/
       Handler: bootstrap
       Runtime: provided.al2023
       Environment:
@@ -216,7 +216,7 @@ Resources:
       BuildMethod: go1.x
     Properties:
       FunctionName: !Sub "${AWS::StackName}-upload-function"
-      CodeUri: cmd/lambda/
+      CodeUri: lambdas/api/upload/
       Handler: bootstrap
       Role: !GetAtt LambdaExecutionRole.Arn
       Environment:
@@ -290,7 +290,7 @@ Resources:
       BuildMethod: go1.x
     Properties:
       FunctionName: !Sub "${AWS::StackName}-login"
-      CodeUri: cmd/login/
+      CodeUri: lambdas/api/login/
       Handler: bootstrap
       Runtime: provided.al2023
       Timeout: 30
@@ -333,7 +333,7 @@ Resources:
       BuildMethod: go1.x
     Properties:
       FunctionName: !Sub "${AWS::StackName}-tenant-authorizer"
-      CodeUri: lambda/authorizer/
+      CodeUri: lambdas/cognito/authorizer/
       Handler: bootstrap
       Runtime: provided.al2023
       Environment:
