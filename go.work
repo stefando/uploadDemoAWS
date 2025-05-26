@@ -1,0 +1,9 @@
+go 1.24
+
+use (
+    .
+    ./cmd/lambda
+    ./cmd/login
+    ./lambda/authorizer
+    ./lambda/pre-token
+)

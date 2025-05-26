@@ -1,4 +1,4 @@
-package models
+package main
 
 // InitiateUploadRequest represents the request to initiate a multipart upload
 type InitiateUploadRequest struct {

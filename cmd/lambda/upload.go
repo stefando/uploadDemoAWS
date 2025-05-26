@@ -1,4 +1,4 @@
-package upload
+package main
 
 import (
 	"context"
@@ -13,8 +13,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/google/uuid"
 
-	"github.com/stefando/uploadDemoAWS/internal/auth"
-	"github.com/stefando/uploadDemoAWS/internal/models"
 )
 
 const (
@@ -80,7 +78,7 @@ func (s *UploadService) UploadFile(ctx context.Context, tenantID string, content
 	}
 
 	// Check if token has enough time left for minimum session duration
-	if tokenExp, ok := auth.GetTokenExpiration(ctx); ok {
+	if tokenExp, ok := GetTokenExpiration(ctx); ok {
 		timeUntilExpiry := time.Unix(tokenExp, 0).Sub(time.Now())
 		minDurationRequired := time.Duration(MinSessionDuration) * time.Second
 		if timeUntilExpiry < minDurationRequired {
@@ -92,7 +90,7 @@ func (s *UploadService) UploadFile(ctx context.Context, tenantID string, content
 	key := generateS3Key(tenantID)
 
 	// Get tenant-scoped credentials
-	tenantCreds, err := auth.AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID, MinSessionDuration)
+	tenantCreds, err := AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID, MinSessionDuration)
 	if err != nil {
 		return "", err
 	}
@@ -126,7 +124,7 @@ func (s *UploadService) UploadFile(ctx context.Context, tenantID string, content
 }
 
 // InitiateMultipartUpload starts a new multipart upload and returns presigned URLs
-func (s *UploadService) InitiateMultipartUpload(ctx context.Context, tenantID string, req *models.InitiateUploadRequest) (*models.InitiateUploadResponse, error) {
+func (s *UploadService) InitiateMultipartUpload(ctx context.Context, tenantID string, req *InitiateUploadRequest) (*InitiateUploadResponse, error) {
 	// Validate inputs
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant ID cannot be empty")
@@ -142,7 +140,7 @@ func (s *UploadService) InitiateMultipartUpload(ctx context.Context, tenantID st
 	objectKey := fmt.Sprintf("%s/%s/%s", tenantID, req.ContainerKey, uuid.New().String())
 
 	// Get tenant-scoped credentials
-	tenantCreds, err := auth.AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID, LongSessionDuration)
+	tenantCreds, err := AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID, LongSessionDuration)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +173,7 @@ func (s *UploadService) InitiateMultipartUpload(ctx context.Context, tenantID st
 
 	// Calculate presigned URL expiration based on token expiration
 	var presignExpiration time.Duration
-	if tokenExp, ok := auth.GetTokenExpiration(ctx); ok {
+	if tokenExp, ok := GetTokenExpiration(ctx); ok {
 		// Token expiration is Unix timestamp in seconds
 		timeUntilExpiry := time.Unix(tokenExp, 0).Sub(time.Now())
 		if timeUntilExpiry > 0 {
@@ -219,7 +217,7 @@ func (s *UploadService) InitiateMultipartUpload(ctx context.Context, tenantID st
 		presignedUrls[i] = presignReq.URL
 	}
 
-	return &models.InitiateUploadResponse{
+	return &InitiateUploadResponse{
 		PresignedUrls: presignedUrls,
 		UploadID:      *createResp.UploadId,
 		ObjectKey:     objectKey,
@@ -227,7 +225,7 @@ func (s *UploadService) InitiateMultipartUpload(ctx context.Context, tenantID st
 }
 
 // CompleteMultipartUpload completes a multipart upload
-func (s *UploadService) CompleteMultipartUpload(ctx context.Context, tenantID string, req *models.CompleteUploadRequest) (*models.CompleteUploadResponse, error) {
+func (s *UploadService) CompleteMultipartUpload(ctx context.Context, tenantID string, req *CompleteUploadRequest) (*CompleteUploadResponse, error) {
 	// Validate inputs
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant ID cannot be empty")
@@ -244,7 +242,7 @@ func (s *UploadService) CompleteMultipartUpload(ctx context.Context, tenantID st
 	// For now, we'll extract it from the first part's presigned URL or require it in the request
 
 	// Get tenant-scoped credentials
-	tenantCreds, err := auth.AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID, MinSessionDuration)
+	tenantCreds, err := AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID, MinSessionDuration)
 	if err != nil {
 		return nil, err
 	}
@@ -286,14 +284,14 @@ func (s *UploadService) CompleteMultipartUpload(ctx context.Context, tenantID st
 		return nil, fmt.Errorf("failed to complete multipart upload: %w", err)
 	}
 
-	return &models.CompleteUploadResponse{
+	return &CompleteUploadResponse{
 		ObjectKey: objectKey,
 		Location:  *completeResp.Location,
 	}, nil
 }
 
 // AbortMultipartUpload cancels an in-progress multipart upload
-func (s *UploadService) AbortMultipartUpload(ctx context.Context, tenantID string, req *models.AbortUploadRequest) error {
+func (s *UploadService) AbortMultipartUpload(ctx context.Context, tenantID string, req *AbortUploadRequest) error {
 	// Validate inputs
 	if tenantID == "" {
 		return fmt.Errorf("tenant ID cannot be empty")
@@ -303,7 +301,7 @@ func (s *UploadService) AbortMultipartUpload(ctx context.Context, tenantID strin
 	}
 
 	// Get tenant-scoped credentials
-	tenantCreds, err := auth.AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID, MinSessionDuration)
+	tenantCreds, err := AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID, MinSessionDuration)
 	if err != nil {
 		return err
 	}
@@ -337,7 +335,7 @@ func (s *UploadService) AbortMultipartUpload(ctx context.Context, tenantID strin
 }
 
 // RefreshPresignedUrls refreshes presigned URLs for specified parts
-func (s *UploadService) RefreshPresignedUrls(ctx context.Context, tenantID string, req *models.RefreshUploadRequest) (*models.RefreshUploadResponse, error) {
+func (s *UploadService) RefreshPresignedUrls(ctx context.Context, tenantID string, req *RefreshUploadRequest) (*RefreshUploadResponse, error) {
 	// Validate inputs
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant ID cannot be empty")
@@ -350,7 +348,7 @@ func (s *UploadService) RefreshPresignedUrls(ctx context.Context, tenantID strin
 	}
 
 	// Get tenant-scoped credentials
-	tenantCreds, err := auth.AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID, LongSessionDuration)
+	tenantCreds, err := AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID, LongSessionDuration)
 	if err != nil {
 		return nil, err
 	}
@@ -375,7 +373,7 @@ func (s *UploadService) RefreshPresignedUrls(ctx context.Context, tenantID strin
 
 	// Calculate presigned URL expiration based on token expiration
 	var presignExpiration time.Duration
-	if tokenExp, ok := auth.GetTokenExpiration(ctx); ok {
+	if tokenExp, ok := GetTokenExpiration(ctx); ok {
 		// Token expiration is Unix timestamp in seconds
 		timeUntilExpiry := time.Unix(tokenExp, 0).Sub(time.Now())
 		if timeUntilExpiry > 0 {
@@ -414,7 +412,7 @@ func (s *UploadService) RefreshPresignedUrls(ctx context.Context, tenantID strin
 		presignedUrls[partNum] = presignReq.URL
 	}
 
-	return &models.RefreshUploadResponse{
+	return &RefreshUploadResponse{
 		PresignedUrls: presignedUrls,
 	}, nil
 }

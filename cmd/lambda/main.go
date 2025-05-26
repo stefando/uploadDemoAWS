@@ -14,14 +14,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/stefando/uploadDemoAWS/internal/auth"
-	"github.com/stefando/uploadDemoAWS/internal/models"
-	"github.com/stefando/uploadDemoAWS/internal/upload"
 )
 
 // Global variables to hold initialized services
 var (
-	uploadService *upload.UploadService
+	uploadService *UploadService
 )
 
 // Init initializes the AWS clients and services
@@ -39,7 +36,7 @@ func init() {
 	}
 
 	// Initialize upload service with AWS config and bucket name
-	uploadService = upload.NewUploadService(cfg, sharedBucket)
+	uploadService = NewUploadService(cfg, sharedBucket)
 
 	log.Printf("Services initialized with shared bucket: %s", sharedBucket)
 }
@@ -74,7 +71,7 @@ func setupRouter() *chi.Mux {
 // handleUpload processes file upload requests
 func handleUpload(w http.ResponseWriter, r *http.Request) {
 	// Get tenant ID from the context (set by Lambda authorizer)
-	tenantID, ok := auth.GetTenantID(r.Context())
+	tenantID, ok := GetTenantID(r.Context())
 	if !ok {
 		http.Error(w, "Tenant ID not found in request context", http.StatusUnauthorized)
 		return
@@ -120,14 +117,14 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 // handleInitiateUpload handles multipart upload initiation
 func handleInitiateUpload(w http.ResponseWriter, r *http.Request) {
 	// Get tenant ID from the context
-	tenantID, ok := auth.GetTenantID(r.Context())
+	tenantID, ok := GetTenantID(r.Context())
 	if !ok {
 		http.Error(w, "Tenant ID not found in request context", http.StatusUnauthorized)
 		return
 	}
 
 	// Parse request body
-	var req models.InitiateUploadRequest
+	var req InitiateUploadRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
@@ -150,14 +147,14 @@ func handleInitiateUpload(w http.ResponseWriter, r *http.Request) {
 // handleCompleteUpload handles multipart upload completion
 func handleCompleteUpload(w http.ResponseWriter, r *http.Request) {
 	// Get tenant ID from the context
-	tenantID, ok := auth.GetTenantID(r.Context())
+	tenantID, ok := GetTenantID(r.Context())
 	if !ok {
 		http.Error(w, "Tenant ID not found in request context", http.StatusUnauthorized)
 		return
 	}
 
 	// Parse request body
-	var req models.CompleteUploadRequest
+	var req CompleteUploadRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
@@ -180,14 +177,14 @@ func handleCompleteUpload(w http.ResponseWriter, r *http.Request) {
 // handleAbortUpload handles multipart upload abort
 func handleAbortUpload(w http.ResponseWriter, r *http.Request) {
 	// Get tenant ID from the context
-	tenantID, ok := auth.GetTenantID(r.Context())
+	tenantID, ok := GetTenantID(r.Context())
 	if !ok {
 		http.Error(w, "Tenant ID not found in request context", http.StatusUnauthorized)
 		return
 	}
 
 	// Parse request body
-	var req models.AbortUploadRequest
+	var req AbortUploadRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
@@ -207,14 +204,14 @@ func handleAbortUpload(w http.ResponseWriter, r *http.Request) {
 // handleRefreshUpload handles refreshing presigned URLs for multipart upload
 func handleRefreshUpload(w http.ResponseWriter, r *http.Request) {
 	// Get tenant ID from the context
-	tenantID, ok := auth.GetTenantID(r.Context())
+	tenantID, ok := GetTenantID(r.Context())
 	if !ok {
 		http.Error(w, "Tenant ID not found in request context", http.StatusUnauthorized)
 		return
 	}
 
 	// Parse request body
-	var req models.RefreshUploadRequest
+	var req RefreshUploadRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
@@ -254,7 +251,7 @@ func lambdaHandler(ctx context.Context, req events.APIGatewayProxyRequest) (even
 		
 		if tenantID, exists := req.RequestContext.Authorizer["tenant_id"].(string); exists && tenantID != "" {
 			// Add tenant ID to request context
-			ctx = auth.WithTenantID(ctx, tenantID)
+			ctx = WithTenantID(ctx, tenantID)
 			log.Printf("Tenant ID from REQUEST authorizer context: %s", tenantID)
 		} else {
 			log.Printf("No tenant_id found in authorizer context: %+v", req.RequestContext.Authorizer)
@@ -263,7 +260,7 @@ func lambdaHandler(ctx context.Context, req events.APIGatewayProxyRequest) (even
 		// Extract token expiration
 		if tokenExp, exists := req.RequestContext.Authorizer["token_expiration"].(float64); exists {
 			// Convert float64 to int64 (API Gateway converts numbers to float64)
-			ctx = auth.WithTokenExpiration(ctx, int64(tokenExp))
+			ctx = WithTokenExpiration(ctx, int64(tokenExp))
 			log.Printf("Token expiration from REQUEST authorizer context: %d", int64(tokenExp))
 		}
 		

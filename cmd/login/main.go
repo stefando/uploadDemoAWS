@@ -10,11 +10,10 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/stefando/uploadDemoAWS/internal/auth"
 )
 
 var (
-	loginService *auth.LoginService
+	loginService *LoginService
 )
 
 func init() {
@@ -31,7 +30,7 @@ func init() {
 	}
 
 	// Initialize login service
-	loginService = auth.NewLoginService(cfg, stackName)
+	loginService = NewLoginService(cfg, stackName)
 	log.Printf("Login service initialized for stack: %s", stackName)
 }
 
@@ -47,7 +46,7 @@ func handleLogin(ctx context.Context, request events.APIGatewayProxyRequest) (ev
 	}
 
 	// Parse request body
-	var loginReq auth.LoginRequest
+	var loginReq LoginRequest
 	if err := json.Unmarshal([]byte(request.Body), &loginReq); err != nil {
 		log.Printf("Failed to parse request body: %v", err)
 		return events.APIGatewayProxyResponse{
