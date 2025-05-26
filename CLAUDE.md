@@ -1,10 +1,19 @@
-# CLAUDE.md
+# CLAUDE.md - Application Stack
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with the application code in this repository.
 
 ## Project Overview
 
 AWS Lambda-based multi-tenant file upload service written in Go. This is a pedagogical demo showcasing:
+
+### Infrastructure Dependency
+This application depends on an infrastructure stack that provides:
+- ACM Certificate for HTTPS
+- DNS configuration
+
+The infrastructure is deployed separately from `../infrastructure/`. See `../infrastructure/CLAUDE.md` for details.
+
+### Application Features
 - Multi-tenant architecture with tenant isolation
 - AWS Cognito authentication with JWT tokens
 - Tag-based S3 access control using resource/session tag matching

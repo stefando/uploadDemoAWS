@@ -13,21 +13,6 @@ Globals:
       - arm64
 
 Parameters:
-  DomainName:
-    Type: String
-    Default: stefando.me
-    Description: The domain name for the API (Route53 hosted zone must exist)
-  
-  ApiSubdomain:
-    Type: String
-    Default: upload-api
-    Description: Subdomain for the API endpoint
-    
-  HostedZoneId:
-    Type: String
-    Description: ID of the Route53 hosted zone for the domain
-    Default: ''
-  
   GitCommit:
     Type: String
     Description: Git commit hash for deployment tracking
@@ -400,39 +385,25 @@ Resources:
         AllowMethods: "'GET,POST,OPTIONS'"
         AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
         AllowOrigin: "'*'"
-      # Custom domain configuration
-      Domain:
-        DomainName: !Sub "${ApiSubdomain}.${DomainName}"
-        CertificateArn: !Ref ApiCertificate
-        EndpointConfiguration: REGIONAL
-        Route53:
-          HostedZoneId: !Ref HostedZoneId
-        # BasePath defaults to "/" which maps to the StageName ("prod")
-        # This means: https://upload-api.stefando.me/upload → https://{api-id}.execute-api.{region}.amazonaws.com/prod/upload
+      # No custom domain configuration - handled by infrastructure stack
 
-  # ================================================
-  # SSL CERTIFICATE - HTTPS Security
-  # ================================================
-  ApiCertificate:
-    Type: AWS::CertificateManager::Certificate
-    Properties:
-      DomainName: !Sub "${ApiSubdomain}.${DomainName}"
-      ValidationMethod: DNS
-      DomainValidationOptions:
-        - DomainName: !Sub "${ApiSubdomain}.${DomainName}"
-          HostedZoneId: !Ref HostedZoneId
-
-  # No need to define HostedZone resource as we're using the HostedZoneId parameter
+  # Certificate and custom domain handled by infrastructure stack
 
 # ================================================
 # OUTPUTS - Information for other systems/testing
 # ================================================
 Outputs:
   ApiUrl:
-    Description: Custom domain API endpoint URL
-    Value: !Sub "https://${ApiSubdomain}.${DomainName}"
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${ApiGateway.Stage}"
     Export:
       Name: !Sub "${AWS::StackName}-api-url"
+      
+  ApiGatewayDomainName:
+    Description: API Gateway domain name for Route53 registration
+    Value: !Sub "${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com"
+    Export:
+      Name: !Sub "${AWS::StackName}-api-gateway-domain"
 
   SharedStorageBucket:
     Description: Shared S3 bucket for all tenants
