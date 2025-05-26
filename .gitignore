@@ -57,3 +57,6 @@ logs/
 # AWS credentials (should never be committed)
 .aws/
 credentials
+
+# Taskfile cache directory
+.task/
