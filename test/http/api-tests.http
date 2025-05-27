@@ -131,10 +131,6 @@ Content-Type: application/json
     });
 %}
 
-# ============================================
-# UPLOAD TESTS - TENANT ISOLATION
-# ============================================
-
 ### Upload file as tom from tenant-a
 POST {{baseUrl}}/upload
 Authorization: Bearer {{accessTokenATom}}
@@ -208,10 +204,6 @@ Content-Type: application/json
         client.assert(response.body.file_path.startsWith("tenant-b/"), "File not stored in tenant-b prefix");
     });
 %}
-
-# ============================================
-# MULTIPART UPLOAD TESTS
-# ============================================
 
 ### Initiate multipart upload as tom from tenant-a
 POST {{baseUrl}}/upload/initiate
