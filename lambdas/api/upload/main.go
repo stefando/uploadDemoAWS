@@ -62,7 +62,7 @@ func setupRouter() *chi.Mux {
 	// Health check endpoint
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		_, _ = w.Write([]byte("OK"))
 	})
 
 	return r
@@ -111,7 +111,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // handleInitiateUpload handles multipart upload initiation
@@ -141,7 +141,7 @@ func handleInitiateUpload(w http.ResponseWriter, r *http.Request) {
 	// Return response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // handleCompleteUpload handles multipart upload completion
@@ -171,7 +171,7 @@ func handleCompleteUpload(w http.ResponseWriter, r *http.Request) {
 	// Return response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // handleAbortUpload handles multipart upload abort
@@ -228,7 +228,7 @@ func handleRefreshUpload(w http.ResponseWriter, r *http.Request) {
 	// Return response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // lambdaHandler is the main Lambda handler function that adapts API Gateway events
@@ -244,7 +244,7 @@ func lambdaHandler(ctx context.Context, req events.APIGatewayProxyRequest) (even
 		}, nil
 	}
 
-	// Extract tenant ID and token expiration from API Gateway REQUEST authorizer context
+	// Extract the tenant ID and token expiration from API Gateway REQUEST authorizer context
 	if req.RequestContext.Authorizer != nil {
 		// For REQUEST authorizers, context is directly in Authorizer map
 		ctx = httpReq.Context()
@@ -268,7 +268,10 @@ func lambdaHandler(ctx context.Context, req events.APIGatewayProxyRequest) (even
 	}
 
 	// Create a response recorder to capture Chi's response
-	respRecorder := newResponseRecorder()
+	respRecorder := &responseRecorder{
+		headers:    make(map[string]string),
+		statusCode: http.StatusOK, // Default status
+	}
 
 	// Process the request through the Chi router
 	router := setupRouter()
@@ -287,7 +290,7 @@ func createHTTPRequest(ctx context.Context, req events.APIGatewayProxyRequest) (
 	// Create a new HTTP request
 	var body io.Reader
 	if req.Body != "" {
-		body = io.NopCloser(io.Reader(io.Reader(strings.NewReader(req.Body))))
+		body = io.NopCloser(strings.NewReader(req.Body))
 	}
 
 	// Determine the full request path
@@ -328,13 +331,6 @@ type responseRecorder struct {
 	statusCode int
 }
 
-// newResponseRecorder creates a new response recorder
-func newResponseRecorder() *responseRecorder {
-	return &responseRecorder{
-		headers:    make(map[string]string),
-		statusCode: http.StatusOK, // Default status
-	}
-}
 
 // Header implements the http.ResponseWriter interface
 func (r *responseRecorder) Header() http.Header {

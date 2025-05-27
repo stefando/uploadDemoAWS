@@ -135,9 +135,10 @@ The stack includes git commit tracking to identify which version of code is depl
 
 ### File Storage Pattern
 - **Direct upload path:** `s3://store-shared/{tenant-id}/YYYY/MM/DD/{guid}.json`
-- **Multipart upload path:** `s3://store-shared/{tenant-id}/{container-key}/{guid}`
+- **Multipart upload path:** `s3://store-shared/{tenant-id}/YYYY/MM/DD/{guid}.raw`
 - Single bucket with tenant-prefixed paths for isolation
 - GUID ensures unique filenames
+- Both patterns use date-based organization for easy lifecycle management
 
 ### Multipart Upload Flow
 1. **Initiate:** Client calls `/upload/initiate` with file size and part size

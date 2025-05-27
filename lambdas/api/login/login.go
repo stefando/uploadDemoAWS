@@ -46,7 +46,7 @@ func (s *LoginService) Authenticate(ctx context.Context, req *LoginRequest) (*Lo
 		return nil, fmt.Errorf("tenant, username, and password are required")
 	}
 
-	// Discover user pool and client by naming convention
+	// Discover the user pool and client by the naming convention
 	userPoolName := fmt.Sprintf("%s-%s-user-pool", s.stackName, req.Tenant)
 	userPoolID, err := s.findUserPoolByName(ctx, userPoolName)
 	if err != nil {

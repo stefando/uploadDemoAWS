@@ -42,7 +42,7 @@ type UploadService struct {
 
 // generateS3Key creates a unique S3 key with tenant prefix and date-based organization
 func generateS3Key(tenantID string) string {
-	// Generate timestamp-based path (YYYY/MM/DD)
+	// Generate a timestamp-based path (YYYY/MM/DD)
 	now := time.Now().UTC()
 	datePath := fmt.Sprintf("%d/%02d/%02d", now.Year(), now.Month(), now.Day())
 
@@ -51,6 +51,19 @@ func generateS3Key(tenantID string) string {
 
 	// Include tenant ID as prefix in the path: <tenant>/YYYY/MM/DD/<guid>.json
 	return fmt.Sprintf("%s/%s/%s.json", tenantID, datePath, fileID)
+}
+
+// generateS3KeyForMultipart creates a unique S3 key for multipart uploads with .raw extension
+func generateS3KeyForMultipart(tenantID string) string {
+	// Generate a timestamp-based path (YYYY/MM/DD)
+	now := time.Now().UTC()
+	datePath := fmt.Sprintf("%d/%02d/%02d", now.Year(), now.Month(), now.Day())
+
+	// Generate a unique filename using UUID
+	fileID := uuid.New().String()
+
+	// Include tenant ID as prefix in the path: <tenant>/YYYY/MM/DD/<guid>.raw
+	return fmt.Sprintf("%s/%s/%s.raw", tenantID, datePath, fileID)
 }
 
 // NewUploadService creates a new upload service
@@ -123,21 +136,75 @@ func (s *UploadService) UploadFile(ctx context.Context, tenantID string, content
 	return key, nil
 }
 
+// validateInitiateRequest validates the initiate multipart upload request
+func validateInitiateRequest(tenantID string, req *InitiateUploadRequest) error {
+	if tenantID == "" {
+		return fmt.Errorf("tenant ID cannot be empty")
+	}
+	if req.Size <= 0 {
+		return fmt.Errorf("size must be greater than zero")
+	}
+	if req.PartSize <= 0 {
+		return fmt.Errorf("part size must be greater than zero")
+	}
+	return nil
+}
+
+// calculatePresignExpiration determines the expiration time for presigned URLs based on token expiration
+func calculatePresignExpiration(ctx context.Context) time.Duration {
+	if tokenExp, ok := GetTokenExpiration(ctx); ok {
+		// Token expiration is Unix timestamp in seconds
+		timeUntilExpiry := time.Unix(tokenExp, 0).Sub(time.Now())
+		if timeUntilExpiry > 0 {
+			// Use token expiration minus a small buffer (5 minutes)
+			presignExpiration := timeUntilExpiry - PresignedURLBuffer
+			if presignExpiration < MinPresignedURLDuration {
+				// Minimum 5 minutes
+				return MinPresignedURLDuration
+			}
+			return presignExpiration
+		}
+		// Token already expired, use minimal duration
+		return MinPresignedURLDuration
+	}
+	// No token expiration in context, default to 2 hours
+	return DefaultPresignedURLDuration
+}
+
+// generatePresignedUrls creates presigned URLs for all parts of a multipart upload
+func (s *UploadService) generatePresignedUrls(ctx context.Context, presignClient *s3.PresignClient, bucketName, objectKey, uploadID string, numParts int, expiration time.Duration) (map[int]string, error) {
+	presignedUrls := make(map[int]string)
+	
+	for i := 1; i <= numParts; i++ {
+		uploadPartReq := &s3.UploadPartInput{
+			Bucket:     aws.String(bucketName),
+			Key:        aws.String(objectKey),
+			PartNumber: aws.Int32(int32(i)),
+			UploadId:   aws.String(uploadID),
+		}
+
+		presignReq, err := presignClient.PresignUploadPart(ctx, uploadPartReq, func(opts *s3.PresignOptions) {
+			opts.Expires = expiration
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate presigned URL for part %d: %w", i, err)
+		}
+
+		presignedUrls[i] = presignReq.URL
+	}
+	
+	return presignedUrls, nil
+}
+
 // InitiateMultipartUpload starts a new multipart upload and returns presigned URLs
 func (s *UploadService) InitiateMultipartUpload(ctx context.Context, tenantID string, req *InitiateUploadRequest) (*InitiateUploadResponse, error) {
 	// Validate inputs
-	if tenantID == "" {
-		return nil, fmt.Errorf("tenant ID cannot be empty")
-	}
-	if req.Size <= 0 {
-		return nil, fmt.Errorf("size must be greater than zero")
-	}
-	if req.PartSize <= 0 {
-		return nil, fmt.Errorf("part size must be greater than zero")
+	if err := validateInitiateRequest(tenantID, req); err != nil {
+		return nil, err
 	}
 
-	// Generate S3 key with container key prefix
-	objectKey := fmt.Sprintf("%s/%s/%s", tenantID, req.ContainerKey, uuid.New().String())
+	// Generate an S3 key with date-based organization and .raw extension
+	objectKey := generateS3KeyForMultipart(tenantID)
 
 	// Get tenant-scoped credentials
 	tenantCreds, err := AssumeRoleForTenant(ctx, s.stsClient, s.roleArn, tenantID, LongSessionDuration)
@@ -167,54 +234,22 @@ func (s *UploadService) InitiateMultipartUpload(ctx context.Context, tenantID st
 		return nil, fmt.Errorf("failed to create multipart upload: %w", err)
 	}
 
-	// Calculate number of parts
+	// Calculate the number of parts
 	numParts := int((req.Size + req.PartSize - 1) / req.PartSize)
-	presignedUrls := make(map[int]string)
 
 	// Calculate presigned URL expiration based on token expiration
-	var presignExpiration time.Duration
-	if tokenExp, ok := GetTokenExpiration(ctx); ok {
-		// Token expiration is Unix timestamp in seconds
-		timeUntilExpiry := time.Unix(tokenExp, 0).Sub(time.Now())
-		if timeUntilExpiry > 0 {
-			// Use token expiration minus a small buffer (5 minutes)
-			presignExpiration = timeUntilExpiry - PresignedURLBuffer
-			if presignExpiration < MinPresignedURLDuration {
-				// Minimum 5 minutes
-				presignExpiration = MinPresignedURLDuration
-			}
-		} else {
-			// Token already expired, use minimal duration
-			presignExpiration = MinPresignedURLDuration
-		}
-	} else {
-		// No token expiration in context, default to 2 hours
-		presignExpiration = DefaultPresignedURLDuration
-	}
+	presignExpiration := calculatePresignExpiration(ctx)
 
 	// Generate presigned URLs for each part
-	for i := 1; i <= numParts; i++ {
-		uploadPartReq := &s3.UploadPartInput{
-			Bucket:     aws.String(s.bucketName),
-			Key:        aws.String(objectKey),
-			PartNumber: aws.Int32(int32(i)),
-			UploadId:   createResp.UploadId,
-		}
-
-		presignReq, err := presignClient.PresignUploadPart(ctx, uploadPartReq, func(opts *s3.PresignOptions) {
-			opts.Expires = presignExpiration
+	presignedUrls, err := s.generatePresignedUrls(ctx, presignClient, s.bucketName, objectKey, *createResp.UploadId, numParts, presignExpiration)
+	if err != nil {
+		// Clean up the multipart upload on error
+		_ = tenantS3Client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+			Bucket:   aws.String(s.bucketName),
+			Key:      aws.String(objectKey),
+			UploadId: createResp.UploadId,
 		})
-		if err != nil {
-			// Clean up the multipart upload
-			tenantS3Client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
-				Bucket:   aws.String(s.bucketName),
-				Key:      aws.String(objectKey),
-				UploadId: createResp.UploadId,
-			})
-			return nil, fmt.Errorf("failed to generate presigned URL for part %d: %w", i, err)
-		}
-
-		presignedUrls[i] = presignReq.URL
+		return nil, err
 	}
 
 	return &InitiateUploadResponse{
@@ -224,17 +259,40 @@ func (s *UploadService) InitiateMultipartUpload(ctx context.Context, tenantID st
 	}, nil
 }
 
+// validateCompleteRequest validates the complete multipart upload request
+func validateCompleteRequest(tenantID string, req *CompleteUploadRequest) error {
+	if tenantID == "" {
+		return fmt.Errorf("tenant ID cannot be empty")
+	}
+	if req.UploadID == "" {
+		return fmt.Errorf("upload ID cannot be empty")
+	}
+	if len(req.PartETags) == 0 {
+		return fmt.Errorf("part ETags cannot be empty")
+	}
+	if req.ObjectKey == "" {
+		return fmt.Errorf("object key cannot be empty")
+	}
+	return nil
+}
+
+// convertPartETags converts part ETags to AWS SDK format
+func convertPartETags(partETags []PartTag) []types.CompletedPart {
+	completedParts := make([]types.CompletedPart, len(partETags))
+	for i, part := range partETags {
+		completedParts[i] = types.CompletedPart{
+			ETag:       aws.String(part.ETag),
+			PartNumber: aws.Int32(int32(part.PartNumber)),
+		}
+	}
+	return completedParts
+}
+
 // CompleteMultipartUpload completes a multipart upload
 func (s *UploadService) CompleteMultipartUpload(ctx context.Context, tenantID string, req *CompleteUploadRequest) (*CompleteUploadResponse, error) {
 	// Validate inputs
-	if tenantID == "" {
-		return nil, fmt.Errorf("tenant ID cannot be empty")
-	}
-	if req.UploadID == "" {
-		return nil, fmt.Errorf("upload ID cannot be empty")
-	}
-	if len(req.PartETags) == 0 {
-		return nil, fmt.Errorf("part ETags cannot be empty")
+	if err := validateCompleteRequest(tenantID, req); err != nil {
+		return nil, err
 	}
 
 	// Extract object key from upload ID (in real implementation, you'd store this mapping)
@@ -256,25 +314,13 @@ func (s *UploadService) CompleteMultipartUpload(ctx context.Context, tenantID st
 		)
 	})
 
-	// Convert part ETags to AWS SDK format
-	completedParts := make([]types.CompletedPart, len(req.PartETags))
-	for i, part := range req.PartETags {
-		completedParts[i] = types.CompletedPart{
-			ETag:       aws.String(part.ETag),
-			PartNumber: aws.Int32(int32(part.PartNumber)),
-		}
-	}
-
-	// Use object key from request
-	objectKey := req.ObjectKey
-	if objectKey == "" {
-		return nil, fmt.Errorf("object key cannot be empty")
-	}
+	// Convert part ETags to the AWS SDK format
+	completedParts := convertPartETags(req.PartETags)
 
 	// Complete the multipart upload
 	completeResp, err := tenantS3Client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 		Bucket:   aws.String(s.bucketName),
-		Key:      aws.String(objectKey),
+		Key:      aws.String(req.ObjectKey),
 		UploadId: aws.String(req.UploadID),
 		MultipartUpload: &types.CompletedMultipartUpload{
 			Parts: completedParts,
@@ -285,7 +331,7 @@ func (s *UploadService) CompleteMultipartUpload(ctx context.Context, tenantID st
 	}
 
 	return &CompleteUploadResponse{
-		ObjectKey: objectKey,
+		ObjectKey: req.ObjectKey,
 		Location:  *completeResp.Location,
 	}, nil
 }
@@ -334,17 +380,28 @@ func (s *UploadService) AbortMultipartUpload(ctx context.Context, tenantID strin
 	return nil
 }
 
+// validateRefreshRequest validates the refresh presigned URLs request
+func validateRefreshRequest(tenantID string, req *RefreshUploadRequest) error {
+	if tenantID == "" {
+		return fmt.Errorf("tenant ID cannot be empty")
+	}
+	if req.UploadID == "" {
+		return fmt.Errorf("upload ID cannot be empty")
+	}
+	if len(req.PartNumbers) == 0 {
+		return fmt.Errorf("part numbers cannot be empty")
+	}
+	if req.ObjectKey == "" {
+		return fmt.Errorf("object key cannot be empty")
+	}
+	return nil
+}
+
 // RefreshPresignedUrls refreshes presigned URLs for specified parts
 func (s *UploadService) RefreshPresignedUrls(ctx context.Context, tenantID string, req *RefreshUploadRequest) (*RefreshUploadResponse, error) {
 	// Validate inputs
-	if tenantID == "" {
-		return nil, fmt.Errorf("tenant ID cannot be empty")
-	}
-	if req.UploadID == "" {
-		return nil, fmt.Errorf("upload ID cannot be empty")
-	}
-	if len(req.PartNumbers) == 0 {
-		return nil, fmt.Errorf("part numbers cannot be empty")
+	if err := validateRefreshRequest(tenantID, req); err != nil {
+		return nil, err
 	}
 
 	// Get tenant-scoped credentials
@@ -365,39 +422,15 @@ func (s *UploadService) RefreshPresignedUrls(ctx context.Context, tenantID strin
 	// Create presigned client
 	presignClient := s3.NewPresignClient(tenantS3Client)
 
-	// Use object key from request
-	objectKey := req.ObjectKey
-	if objectKey == "" {
-		return nil, fmt.Errorf("object key cannot be empty")
-	}
-
 	// Calculate presigned URL expiration based on token expiration
-	var presignExpiration time.Duration
-	if tokenExp, ok := GetTokenExpiration(ctx); ok {
-		// Token expiration is Unix timestamp in seconds
-		timeUntilExpiry := time.Unix(tokenExp, 0).Sub(time.Now())
-		if timeUntilExpiry > 0 {
-			// Use token expiration minus a small buffer (5 minutes)
-			presignExpiration = timeUntilExpiry - PresignedURLBuffer
-			if presignExpiration < MinPresignedURLDuration {
-				// Minimum 5 minutes
-				presignExpiration = MinPresignedURLDuration
-			}
-		} else {
-			// Token already expired, use minimal duration
-			presignExpiration = MinPresignedURLDuration
-		}
-	} else {
-		// No token expiration in context, default to 2 hours
-		presignExpiration = DefaultPresignedURLDuration
-	}
+	presignExpiration := calculatePresignExpiration(ctx)
 
-	// Generate new presigned URLs for requested parts
+	// Generate refreshed presigned URLs for requested parts
 	presignedUrls := make(map[int]string)
 	for _, partNum := range req.PartNumbers {
 		uploadPartReq := &s3.UploadPartInput{
 			Bucket:     aws.String(s.bucketName),
-			Key:        aws.String(objectKey),
+			Key:        aws.String(req.ObjectKey),
 			PartNumber: aws.Int32(int32(partNum)),
 			UploadId:   aws.String(req.UploadID),
 		}

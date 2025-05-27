@@ -18,7 +18,7 @@ var (
 )
 
 func init() {
-	// Initialize DynamoDB client
+	// Initialize the DynamoDB client
 	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
 		log.Fatalf("Failed to load AWS config: %v", err)
@@ -35,7 +35,7 @@ func init() {
 func HandleRequest(ctx context.Context, event events.CognitoEventUserPoolsPreTokenGenV2_0) (events.CognitoEventUserPoolsPreTokenGenV2_0, error) {
 	log.Printf("Received event for user: %s in pool: %s", event.UserName, event.UserPoolID)
 
-	// Look up tenant ID from DynamoDB using pool ID
+	// Look up the tenant ID from DynamoDB using the pool ID
 	result, err := dynamoClient.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: &tableName,
 		Key: map[string]types.AttributeValue{
@@ -53,7 +53,7 @@ func HandleRequest(ctx context.Context, event events.CognitoEventUserPoolsPreTok
 		return event, nil
 	}
 	
-	// Extract tenant ID from result
+	// Extract the tenant ID from the result
 	tenantAttr, ok := result.Item["tenant_id"]
 	if !ok {
 		log.Printf("No tenant_id attribute in mapping for pool %s", event.UserPoolID)
@@ -69,13 +69,13 @@ func HandleRequest(ctx context.Context, event events.CognitoEventUserPoolsPreTok
 	tenantID := tenantIDValue.Value
 	log.Printf("Found tenant ID: %s for pool: %s", tenantID, event.UserPoolID)
 
-	// Add tenant_id claim to ID tokens
+	// Add the tenant_id claim to ID tokens
 	if event.Response.ClaimsAndScopeOverrideDetails.IDTokenGeneration.ClaimsToAddOrOverride == nil {
 		event.Response.ClaimsAndScopeOverrideDetails.IDTokenGeneration.ClaimsToAddOrOverride = make(map[string]interface{})
 	}
 	event.Response.ClaimsAndScopeOverrideDetails.IDTokenGeneration.ClaimsToAddOrOverride["tenant_id"] = tenantID
 
-	// Add tenant_id to access tokens (KEY for API Gateway authorization!)
+	// Add tenant_id to the access tokens (KEY for API Gateway authorization!)
 	if event.Response.ClaimsAndScopeOverrideDetails.AccessTokenGeneration.ClaimsToAddOrOverride == nil {
 		event.Response.ClaimsAndScopeOverrideDetails.AccessTokenGeneration.ClaimsToAddOrOverride = make(map[string]interface{})
 	}

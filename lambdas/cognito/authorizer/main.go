@@ -23,7 +23,7 @@ type TokenInfo struct {
 
 // extractIssuerFromToken extracts the issuer claim from a JWT token without verification.
 // This is safe because we immediately verify the token with the extracted issuer's keys.
-// We need this because the OIDC library requires knowing the issuer URL to fetch public keys,
+// We need this because the OIDC library requires knowing the issuer URL to fetch the public keys,
 // but the issuer is inside the token itself.
 func extractIssuerFromToken(tokenStr string) (string, error) {
 	// JWT format: header.payload.signature
@@ -61,7 +61,7 @@ func ValidateToken(ctx context.Context, tokenStr string) (*TokenInfo, error) {
 	
 	log.Printf("🔍 Token issuer: %s", issuer)
 	
-	// Connect to the issuer's OIDC endpoint to get public keys
+	// Connect to the issuer's OIDC endpoint to get the public keys
 	provider, err := oidc.NewProvider(ctx, issuer)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create OIDC provider for issuer %s: %w", issuer, err)
@@ -84,16 +84,16 @@ func ValidateToken(ctx context.Context, tokenStr string) (*TokenInfo, error) {
 		return nil, fmt.Errorf("failed to decode claims: %w", err)
 	}
 
-	// Extract tenant_id - this is our custom claim added by pre-token Lambda
+	// Extract tenant_id - this is our custom claim added by the pre-token Lambda
 	tenant, _ := claims["tenant_id"].(string)
 	if tenant == "" {
 		return nil, fmt.Errorf("missing tenant_id claim")
 	}
 
-	// Extract username (Cognito uses "username" claim in access tokens)
+	// Extract username (Cognito uses the "username" claim in access tokens)
 	username, _ := claims["username"].(string)
 	
-	// Extract expiration (standard claim "exp")
+	// Extract the expiration (standard claim "exp")
 	exp, _ := claims["exp"].(float64)
 	expiration := int64(exp)
 
@@ -107,6 +107,50 @@ func ValidateToken(ctx context.Context, tokenStr string) (*TokenInfo, error) {
 	}, nil
 }
 
+// extractAuthorizationHeader retrieves the authorization header from the request
+func extractAuthorizationHeader(headers map[string]string) (string, bool) {
+	// Try standard capitalization first
+	if authHeader, exists := headers["Authorization"]; exists {
+		return authHeader, true
+	}
+	// Try lowercase as fallback
+	if authHeader, exists := headers["authorization"]; exists {
+		return authHeader, true
+	}
+	return "", false
+}
+
+// stripBearerPrefix removes the "Bearer " prefix from a token if present
+func stripBearerPrefix(token string) string {
+	if len(token) > 7 {
+		prefix := strings.ToLower(token[:7])
+		if prefix == "bearer " {
+			log.Printf("🔍 Stripped 'Bearer ' prefix (case insensitive)")
+			return token[7:] // Remove "Bearer " prefix (7 characters)
+		}
+	}
+	return token
+}
+
+// createAuthorizerResponse creates a standardized authorizer response
+func createAuthorizerResponse(principalID string, allow bool, methodArn string, context map[string]interface{}) events.APIGatewayCustomAuthorizerResponse {
+	effect := "Allow"
+	if !allow {
+		effect = "Deny"
+	}
+	
+	response := events.APIGatewayCustomAuthorizerResponse{
+		PrincipalID:    principalID,
+		PolicyDocument: generatePolicy(effect, methodArn),
+	}
+	
+	if context != nil {
+		response.Context = context
+	}
+	
+	return response
+}
+
 func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequestTypeRequest) (events.APIGatewayCustomAuthorizerResponse, error) {
 	log.Printf("🚀 REQUEST AUTHORIZER INVOKED: Starting authorization for %s", event.MethodArn)
 	log.Printf("📋 REQUEST INFO: %s %s", event.HTTPMethod, event.Path)
@@ -116,31 +160,18 @@ func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest
 	log.Printf("📋 All Headers: %+v", event.Headers)
 
 	// Extract Authorization header from REQUEST event
-	authHeader, exists := event.Headers["Authorization"]
-	if !exists {
-		authHeader, exists = event.Headers["authorization"] // Try lowercase
-	}
-
+	authHeader, exists := extractAuthorizationHeader(event.Headers)
 	log.Printf("🎟️  Authorization Header Present: %v (looking for: Authorization or authorization)", exists)
 	if !exists {
 		log.Printf("❌ AUTHORIZATION FAILED: No Authorization header found")
-		return events.APIGatewayCustomAuthorizerResponse{
-			PrincipalID:    "unauthorized",
-			PolicyDocument: generatePolicy("Deny", event.MethodArn),
-		}, nil
+		return createAuthorizerResponse("unauthorized", false, event.MethodArn, nil), nil
 	}
 
 	token := authHeader
 	log.Printf("🔍 Raw token received (length: %d): %s", len(token), token)
 
-	// Handle case-insensitive "Bearer " prefix stripping
-	if len(token) > 7 {
-		prefix := strings.ToLower(token[:7])
-		if prefix == "bearer " {
-			token = token[7:] // Remove "Bearer " prefix (7 characters)
-			log.Printf("🔍 Stripped 'Bearer ' prefix (case insensitive)")
-		}
-	}
+	// Handle the case-insensitive stripping of the "Bearer " prefix
+	token = stripBearerPrefix(token)
 
 	log.Printf("🔍 Token after stripping (length: %d)", len(token))
 	if len(token) > 80 {
@@ -152,25 +183,20 @@ func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest
 	tokenInfo, err := ValidateToken(ctx, token)
 	if err != nil {
 		log.Printf("❌ AUTHORIZATION FAILED: %v", err)
-		return events.APIGatewayCustomAuthorizerResponse{
-			PrincipalID:    "unauthorized",
-			PolicyDocument: generatePolicy("Deny", event.MethodArn),
-		}, nil
+		return createAuthorizerResponse("unauthorized", false, event.MethodArn, nil), nil
 	}
 
 	log.Printf("✅ AUTHORIZATION SUCCESSFUL: tenant=%s, user=%s, exp=%d", 
 		tokenInfo.TenantID, tokenInfo.Username, tokenInfo.Expiration)
 	
 	// Pass token information to the Lambda via context
-	return events.APIGatewayCustomAuthorizerResponse{
-		PrincipalID:    tokenInfo.TenantID,
-		PolicyDocument: generatePolicy("Allow", event.MethodArn),
-		Context: map[string]interface{}{
-			"tenant_id":        tokenInfo.TenantID,
-			"username":         tokenInfo.Username,
-			"token_expiration": fmt.Sprintf("%d", tokenInfo.Expiration), // Must be string in context
-		},
-	}, nil
+	authContext := map[string]interface{}{
+		"tenant_id":        tokenInfo.TenantID,
+		"username":         tokenInfo.Username,
+		"token_expiration": fmt.Sprintf("%d", tokenInfo.Expiration), // Must be string in context
+	}
+	
+	return createAuthorizerResponse(tokenInfo.TenantID, true, event.MethodArn, authContext), nil
 }
 
 func generatePolicy(effect, resource string) events.APIGatewayCustomAuthorizerPolicy {

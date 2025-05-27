@@ -47,7 +47,7 @@ func GetTokenExpiration(ctx context.Context) (int64, bool) {
 }
 
 // AssumeRoleForTenant assumes an IAM role with tenant-specific session tags
-// This enables fine-grained access control based on tenant identity
+// This enables fine-grained access control based on the tenant identity
 // durationSeconds controls how long the credentials are valid (max 10800 for our role)
 func AssumeRoleForTenant(ctx context.Context, stsClient *sts.Client, roleArn, tenantID string, durationSeconds int32) (aws.Credentials, error) {
 	if tenantID == "" {
@@ -58,7 +58,7 @@ func AssumeRoleForTenant(ctx context.Context, stsClient *sts.Client, roleArn, te
 		return aws.Credentials{}, fmt.Errorf("role ARN cannot be empty")
 	}
 
-	// Create session name with tenant ID and timestamp for uniqueness
+	// Create a session name with tenant ID and timestamp for uniqueness
 	sessionName := fmt.Sprintf("tenant-%s-session-%d", tenantID, time.Now().Unix())
 
 	// Prepare assume role input with tenant session tag

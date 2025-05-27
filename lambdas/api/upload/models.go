@@ -2,9 +2,8 @@ package main
 
 // InitiateUploadRequest represents the request to initiate a multipart upload
 type InitiateUploadRequest struct {
-	ContainerKey string `json:"containerKey"`
-	Size         int64  `json:"size"`
-	PartSize     int64  `json:"partSize"`
+	Size     int64 `json:"size"`
+	PartSize int64 `json:"partSize"`
 }
 
 // InitiateUploadResponse contains presigned URLs and upload metadata
