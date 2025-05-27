@@ -228,6 +228,10 @@ The stack includes git commit tracking to identify which version of code is depl
 - Chi router for HTTP routing (future expansion)
 - SAM BuildMethod: go1.x works with individual Go modules
 
+### Demoware Trade-offs
+
+**Multipart Upload Error Handling**: In production, consider separating multipart upload creation from presigned URL generation. Current implementation aborts uploads when URL generation fails, which may not be optimal for retry scenarios. The design conflates two distinct operations (upload creation vs URL generation) in a single API call.
+
 ## Demo and Testing Instructions
 
 ### Environment Setup

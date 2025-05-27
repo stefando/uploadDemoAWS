@@ -243,13 +243,15 @@ func (s *UploadService) InitiateMultipartUpload(ctx context.Context, tenantID st
 	// Generate presigned URLs for each part
 	presignedUrls, err := s.generatePresignedUrls(ctx, presignClient, s.bucketName, objectKey, *createResp.UploadId, numParts, presignExpiration)
 	if err != nil {
-		// Clean up the multipart upload on error
-		_ = tenantS3Client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+		// DEMOWARE DECISION: Abort on presigned URL failure
+		// In production, consider returning partial success (UploadID + ObjectKey)
+		// and letting client retry via /upload/refresh endpoint
+		_, _ = tenantS3Client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
 			Bucket:   aws.String(s.bucketName),
 			Key:      aws.String(objectKey),
 			UploadId: createResp.UploadId,
 		})
-		return nil, err
+		return nil, fmt.Errorf("failed to generate presigned URLs: %w", err)
 	}
 
 	return &InitiateUploadResponse{

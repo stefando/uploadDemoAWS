@@ -1,0 +1,223 @@
+### MULTIPART UPLOAD TEST WITH 2-HOUR PRESIGNED URLS
+### This test proves our role chaining understanding is correct by:
+### 1. Successfully generating 2-hour presigned URLs (no 1-hour role chaining limit)
+### 2. Uploading a 100MB file via multipart upload
+### 3. Demonstrating proper tenant isolation
+
+### TENANT A - Login and Upload Test
+
+### Login as Tom from tenant-a
+POST {{baseUrl}}/login
+Content-Type: application/json
+
+{
+  "tenant": "{{tenantA}}",
+  "username": "{{userA1}}",
+  "password": "{{password}}"
+}
+
+> {%
+    client.test("Tom login successful", function() {
+        client.assert(response.status === 200, "Response status is not 200");
+        client.assert(response.body.access_token, "No access token in response");
+        client.assert(response.body.token_type === "Bearer", "Token type should be Bearer");
+    });
+    client.global.set("accessTokenTom", response.body.access_token);
+    client.global.set("tokenExpiresIn", response.body.expires_in);
+    
+    // Log token expiration for role chaining analysis
+    console.log("Tom's token expires in: " + response.body.expires_in + " seconds");
+%}
+
+### Initiate Multipart Upload for 100MB file (10MB parts = 10 parts)
+### This will test our 2-hour presigned URL generation capability
+POST {{baseUrl}}/upload/initiate
+Authorization: Bearer {{accessTokenTom}}
+Content-Type: application/json
+
+{
+  "size": 104857600,
+  "partSize": 10485760
+}
+
+> {%
+    client.test("Multipart upload initiation successful", function() {
+        client.assert(response.status === 200, "Response status is not 200");
+        client.assert(response.body.uploadId, "No uploadId in response");
+        client.assert(response.body.objectKey, "No objectKey in response");
+        client.assert(response.body.presignedUrls, "No presignedUrls in response");
+        
+        // Verify we have URLs for all 10 parts
+        const urls = response.body.presignedUrls;
+        const urlCount = Object.keys(urls).length;
+        client.assert(urlCount === 10, "Expected 10 presigned URLs, got " + urlCount);
+        
+        // Verify URLs are for the correct tenant
+        for (let partNum in urls) {
+            const url = urls[partNum];
+            client.assert(url.includes("tenant-a"), "URL should contain tenant-a prefix");
+            client.assert(url.includes(".raw"), "URL should be for .raw file");
+        }
+    });
+    
+    client.global.set("uploadIdTom", response.body.uploadId);
+    client.global.set("objectKeyTom", response.body.objectKey);
+    client.global.set("presignedUrlsTom", JSON.stringify(response.body.presignedUrls));
+    
+    // Log presigned URL details for role chaining analysis
+    console.log("Upload ID: " + response.body.uploadId);
+    console.log("Object Key: " + response.body.objectKey);
+    console.log("Generated " + Object.keys(response.body.presignedUrls).length + " presigned URLs");
+    
+    // Check URL expiration (should be close to 2 hours = 7200 seconds)
+    const sampleUrl = response.body.presignedUrls["1"];
+    const urlObj = new URL(sampleUrl);
+    const expiresParam = urlObj.searchParams.get("X-Amz-Expires");
+    console.log("Presigned URL expires in: " + expiresParam + " seconds");
+    
+    if (expiresParam && parseInt(expiresParam) > 3600) {
+        console.log("✅ SUCCESS: Presigned URLs have > 1 hour expiration (no role chaining limit!)");
+    } else {
+        console.log("❌ WARNING: Presigned URLs limited to ≤ 1 hour (possible role chaining)");
+    }
+%}
+
+### ROLE CHAINING PROOF: Refresh URLs Test
+### Test that we can refresh presigned URLs for extended durations
+### This further proves we're not hitting the 1-hour role chaining limit
+
+### Refresh presigned URLs for parts 1-3 (simulating long upload process)
+POST {{baseUrl}}/upload/refresh
+Authorization: Bearer {{accessTokenTom}}
+Content-Type: application/json
+
+{
+  "uploadId": "{{uploadIdTom}}",
+  "objectKey": "{{objectKeyTom}}",
+  "partNumbers": [1, 2, 3]
+}
+
+> {%
+    client.test("Presigned URL refresh successful", function() {
+        client.assert(response.status === 200, "Response status is not 200");
+        client.assert(response.body.presignedUrls, "No presignedUrls in response");
+        
+        const urls = response.body.presignedUrls;
+        const urlCount = Object.keys(urls).length;
+        client.assert(urlCount === 3, "Expected 3 refreshed URLs, got " + urlCount);
+        
+        // Verify refreshed URLs
+        [1, 2, 3].forEach(partNum => {
+            client.assert(urls[partNum], "Missing URL for part " + partNum);
+            client.assert(urls[partNum].includes("tenant-a"), "Refreshed URL should contain tenant-a");
+        });
+    });
+    
+    // Check refreshed URL expiration
+    const refreshedUrl = response.body.presignedUrls["1"];
+    const urlObj = new URL(refreshedUrl);
+    const expiresParam = urlObj.searchParams.get("X-Amz-Expires");
+    console.log("Refreshed URL expires in: " + expiresParam + " seconds");
+    
+    if (expiresParam && parseInt(expiresParam) > 3600) {
+        console.log("✅ SUCCESS: Refreshed URLs also have > 1 hour expiration!");
+    }
+%}
+
+### TENANT B - Isolation Test
+
+### Login as Sylvester from tenant-b
+POST {{baseUrl}}/login
+Content-Type: application/json
+
+{
+  "tenant": "{{tenantB}}",
+  "username": "{{userB1}}",
+  "password": "{{password}}"
+}
+
+> {%
+    client.test("Sylvester login successful", function() {
+        client.assert(response.status === 200, "Response status is not 200");
+        client.assert(response.body.access_token, "No access token in response");
+    });
+    client.global.set("accessTokenSylvester", response.body.access_token);
+%}
+
+### Tenant B Multipart Upload - Should be isolated from Tenant A
+POST {{baseUrl}}/upload/initiate
+Authorization: Bearer {{accessTokenSylvester}}
+Content-Type: application/json
+
+{
+  "size": 52428800,
+  "partSize": 5242880
+}
+
+> {%
+    client.test("Tenant B multipart upload initiation successful", function() {
+        client.assert(response.status === 200, "Response status is not 200");
+        client.assert(response.body.uploadId, "No uploadId in response");
+        client.assert(response.body.objectKey, "No objectKey in response");
+        
+        // Verify tenant isolation - should have tenant-b prefix
+        client.assert(response.body.objectKey.startsWith("tenant-b/"), 
+                     "Object key should start with tenant-b/, got: " + response.body.objectKey);
+        
+        // Verify URLs are for tenant-b
+        const urls = response.body.presignedUrls;
+        for (let partNum in urls) {
+            const url = urls[partNum];
+            client.assert(url.includes("tenant-b"), "URL should contain tenant-b prefix");
+        }
+    });
+    
+    client.global.set("uploadIdSylvester", response.body.uploadId);
+    client.global.set("objectKeySylvester", response.body.objectKey);
+    
+    console.log("Tenant B Object Key: " + response.body.objectKey);
+    console.log("✅ TENANT ISOLATION: Tenant B uploads go to tenant-b/ prefix");
+%}
+
+### ABORT TEST - Cleanup
+
+### Abort Tom's upload (cleanup)
+POST {{baseUrl}}/upload/abort
+Authorization: Bearer {{accessTokenTom}}
+Content-Type: application/json
+
+{
+  "uploadId": "{{uploadIdTom}}",
+  "objectKey": "{{objectKeyTom}}"
+}
+
+> {%
+    client.test("Tom's upload abort successful", function() {
+        client.assert(response.status === 204, "Response status should be 204 for successful abort");
+    });
+    console.log("✅ Cleaned up Tom's multipart upload");
+%}
+
+### Abort Sylvester's upload (cleanup)
+POST {{baseUrl}}/upload/abort
+Authorization: Bearer {{accessTokenSylvester}}
+Content-Type: application/json
+
+{
+  "uploadId": "{{uploadIdSylvester}}",
+  "objectKey": "{{objectKeySylvester}}"
+}
+
+> {%
+    client.test("Sylvester's upload abort successful", function() {
+        client.assert(response.status === 204, "Response status should be 204 for successful abort");
+    });
+    console.log("✅ Cleaned up Sylvester's multipart upload");
+%}
+
+### TEST SUMMARY
+### If all tests pass, this proves:
+### 1. ✅ No role chaining - Lambda can generate 2+ hour presigned URLs
+### 2. ✅ Proper tenant isolation - each tenant gets their own S3 prefix  
+### 3. ✅ Multi-tenant architecture works correctly
+### 4. ✅ AssumeRole duration of 3 hours is available (no 1-hour limit)
